@@ -1,6 +1,6 @@
 # CSI Manila driver
 
-The CSI Manila driver is able to create and mount OpenStack Manila shares. Snapshots and recovering shares from snapshots is supported as well (support for CephFS snapshots will be added soon).
+The CSI Manila driver is able to create, take snapshots of, and mount OpenStack Manila shares.
 
 ###### Table of contents
 
@@ -13,6 +13,9 @@ The CSI Manila driver is able to create and mount OpenStack Manila shares. Snaps
   * [Kubernetes 1.15+](#kubernetes-115)
     * [Verifying the deployment](#verifying-the-deployment)
 * [Share protocol support matrix](#share-protocol-support-matrix)
+* [Compatibility layers](#compatibility-layers)
+  * [`create_share_from_snapshot_support` compatibility layer](#create_share_from_snapshot_support-compatibility-layer)
+    * [CephFS](#create_share_from_snapshot_support-for-cephfs)
 * [For developers](#for-developers)
 
 ## Configuration
@@ -21,11 +24,14 @@ The CSI Manila driver is able to create and mount OpenStack Manila shares. Snaps
 
 Option | Default value | Description
 -------|---------------|------------
-`--endpoint` | `unix:///tmp/csi.sock` | CSI Manila's CSI endpoint
+`--endpoint` | _none_ | Path to a `.sock` file. CSI Manila's CSI endpoint
 `--drivername` | `manila.csi.openstack.org` | Name of this driver
 `--nodeid` | _none_ | ID of this node
 `--share-protocol-selector` | _none_ | Specifies which Manila share protocol to use for this instance of the driver. See [supported protocols](#share-protocol-support-matrix) for valid values.
 `--fwdendpoint` | _none_ | [CSI Node Plugin](https://github.com/container-storage-interface/spec/blob/master/spec.md#rpc-interface) endpoint to which all Node Service RPCs are forwarded. Must be able to handle the file-system specified in `share-protocol-selector`. Check out the [Deployment](#deployment) section to see why this is necessary.
+`--compatibility-settings` | _see [Compatibility layers](#compatibility-layers)_ | (Optional) Various compatibility settings for the compatibility layer. Accepts a comma separated list of compatibility settings: `--compatibility-settings=...,<COMPAT>=<VALUE>`. See [Compatibility layers](#compatibility-layers) for more info.
+
+_All command line arguments are required unless a default value is provided or the description says otherwise._
 
 ### Controller Service volume parameters
 
@@ -137,6 +143,49 @@ Manila share protocol | CSI Node Plugin
 ----------------------|----------------
 `CEPHFS` | [CSI CephFS](https://github.com/ceph/ceph-csi) : v1.0.0
 `NFS` | [CSI NFS](https://github.com/kubernetes-csi/csi-driver-nfs) : v1.0.0
+
+## Compatibility layers
+
+OpenStack Manila provides consistent support for features across a number of storage back-ends with [some exceptions](https://docs.openstack.org/manila/stein/admin/share_back_ends_feature_support_mapping.html). While using the native Manila functionality is always the preferred way of operating on shared storage, the CSI Manila driver may try to supplement some capabilities in chosen storage back-ends as a way of filling-out the feature gap in case that particular capability is not advertised by Manila.
+
+The driver checks for Manila capabilities by reading extra specs from the share type that's passed via [volume parameters](#controller-service-volume-parameters). Based on those the driver either chooses to use Manila's native support or a compatibility layer, if one exists. The table below shows an incidence matrix for in-driver capabilities and storage back-ends (_x_ means a compatibility layer is available):
+
+&nbsp; | `create_share_from_snapshot_support`
+----------|----------
+NFS | <center>_native support_</center>
+CephFS | <center>x</center>
+
+Please note that in-driver compatibility layers may offer sub-optimal performance and/or limited functionality.
+
+### `create_share_from_snapshot_support` compatibility layer
+
+`create_share_from_snapshot_support` compatibility layer is disabled by default.
+
+Settings option | Default value | Description
+----------|----------|------------
+`CreateShareFromSnapshotEnabled` | `false` | Boolean value. Enables  `create_share_from_snapshot_support` compatibility layer.
+`CreateShareFromSnapshotRetries` | `10` | Integer value. Maximum number of retries before the driver gives up on snapshot restoration.
+`CreateShareFromSnapshotBackoffInterval` | `5` | Integer value. Initial waiting time in seconds. Used in exponential back-off.
+
+#### Failure recovery
+In case there has been too many (`CreateShareFromSnapshotRetries`) errors during provisioning of the share, the `CreateVolume` call moves into a permanent failure state. In such event the destination share is tagged with `manila.csi.openstack.org/created-from-snapshot=FAILED` metadata and must be disposed of manually. Consult the driver's logs to troubleshoot the cause of the problem further.
+
+#### `create_share_from_snapshot_support` for CephFS
+
+**Available CephFS-specific settings:**
+
+Settings option | Default value | Description
+----------|----------|------------
+`CreateShareFromSnapshotCephFSMounts` | _none_ | Required for CephFS snapshots. Path to a bidirectional mount point for CephFS mounts.
+`CreateShareFromSnapshotCephFSLogErrorsToFile` | `false` | Boolean value. By default, any errors from rsync will be written to stdout. Setting this parameter to `true` will set stderr for rsync to  `/rsync-errors-<snapshot-ID>.txt` in the destination share.
+
+In order to create a share from a CephFS snapshot, the data needs to be copied over from the snapshot into a new share. CSI Manila will therefore create a blank (destination) share, mount it, mount the source share containing the snapshot and copy the data to destination using [rsync](https://rsync.samba.org/).
+
+Mounting the shares is delegated to CSI CephFS, which poses two requirements on the way CSI Manila and CSI CephFS are deployed:
+1. CSI CephFS Node Plugin must run on the same node where CSI Manila Controller Plugin runs, although this is already implied by the `--fwdendpoint` [command line option](#command-line-arguments)
+2. they both must share a bidirectional mount point in order to propagate mounts from CSI CephFS into CSI Manila.
+
+The operator must make sure both of these conditions are met in order for `create_share_from_snapshot_support` compatibility layer for CephFS to work.
 
 ## For developers
 
