@@ -45,7 +45,7 @@ var (
 	rbSnapshotID = responsebroker.New()
 )
 
-func getVolumeCreator(source *csi.VolumeContentSource) (volumeCreator, error) {
+func getVolumeCreator(source *csi.VolumeContentSource, shareOpts *options.ControllerVolumeContext, compatOpts *options.CompatibilityOptions, shareTypeCaps manilaCapabilities) (volumeCreator, error) {
 	if source == nil {
 		return &blankVolume{}, nil
 	}
@@ -55,6 +55,11 @@ func getVolumeCreator(source *csi.VolumeContentSource) (volumeCreator, error) {
 	}
 
 	if source.GetSnapshot() != nil {
+		if tryGetCompatibilityMode(compatOpts, shareOpts, source, shareTypeCaps) != nil {
+			klog.Infof("share type %s does not advertise create_share_from_snapshot_support capability, compatibility mode is available", shareOpts.Type)
+			return &blankVolume{}, nil
+		}
+
 		return &volumeFromSnapshot{}, nil
 	}
 
@@ -96,10 +101,11 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	var (
 		res = &requestResult{}
 
-		manilaClient manilaclient.Interface
-		volCreator   volumeCreator
-		share        *shares.Share
-		accessRight  *shares.AccessRight
+		manilaClient  manilaclient.Interface
+		volCreator    volumeCreator
+		share         *shares.Share
+		accessRight   *shares.AccessRight
+		shareTypeCaps manilaCapabilities
 	)
 
 	defer writeResponse(handle, rbVolumeID, req.GetName(), res)
@@ -107,6 +113,10 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	manilaClient, res.err = cs.d.manilaClientBuilder.New(osOpts)
 	if res.err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", res.err)
+	}
+
+	if shareTypeCaps, res.err = getManilaCapabilities(shareOpts.Type, manilaClient); res.err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get Manila capabilities for share type %s: %v", shareOpts.Type, res.err)
 	}
 
 	requestedSize := req.GetCapacityRange().GetRequiredBytes()
@@ -119,7 +129,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// Retrieve an existing share or create a new one
 
-	if volCreator, res.err = getVolumeCreator(req.GetVolumeContentSource()); res.err != nil {
+	if volCreator, res.err = getVolumeCreator(req.GetVolumeContentSource(), shareOpts, cs.d.compatOpts, shareTypeCaps); res.err != nil {
 		return nil, res.err
 	}
 
@@ -127,7 +137,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, res.err
 	}
 
-	if res.err = verifyVolumeCompatibility(sizeInGiB, req, share, shareOpts); res.err != nil {
+	if res.err = verifyVolumeCompatibility(sizeInGiB, req, share, shareOpts, cs.d.compatOpts, shareTypeCaps); res.err != nil {
 		return nil, status.Errorf(codes.AlreadyExists, "a share named %s already exists, but is incompatible with the request: %v", req.GetName(), res.err)
 	}
 
@@ -144,6 +154,14 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 
 		return nil, status.Errorf(codes.Internal, "failed to grant access for share %s: %v", share.ID, res.err)
+	}
+
+	// Check if compatibility mode is needed and can be used
+	if compatHandler := tryGetCompatibilityMode(cs.d.compatOpts, shareOpts, req.GetVolumeContentSource(), shareTypeCaps); compatHandler != nil {
+		if res.err = compatHandler.supplementCapability(cs.d, share, accessRight, req, manilaClient); res.err != nil {
+			// The user must clean the share manually
+			return nil, res.err
+		}
 	}
 
 	res.dataPtr = &csi.CreateVolumeResponse{
@@ -185,12 +203,6 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 }
 
 func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	if cs.d.shareProto == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Creating CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.InvalidArgument, "the driver doesn't support snapshotting CephFS shares yet")
-	}
-
 	if err := validateCreateSnapshotRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -306,12 +318,6 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 }
 
 func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	if cs.d.shareProto == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Deleting CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.InvalidArgument, "the driver doesn't support CephFS snapshots yet")
-	}
-
 	if err := validateDeleteSnapshotRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
