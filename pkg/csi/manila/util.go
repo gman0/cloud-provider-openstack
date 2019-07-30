@@ -19,12 +19,14 @@ package manila
 import (
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/gophercloud/gophercloud"
 	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/messages"
 	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/shares"
+	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/sharetypes"
 	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/snapshots"
 	"google.golang.org/grpc/codes"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
@@ -197,6 +199,105 @@ func compareProtocol(protoA, protoB string) bool {
 	return strings.ToUpper(protoA) == strings.ToUpper(protoB)
 }
 
+func shareTypeGetExtraSpecs(shareType string, manilaClient manilaclient.Interface) (sharetypes.ExtraSpecs, error) {
+	extraSpecs, err := manilaClient.GetExtraSpecs(shareType)
+
+	if isManilaErrNotFound(err) {
+		// Maybe shareType is share type name, try to get its ID
+
+		id, err := manilaClient.GetShareTypeIDFromName(shareType)
+		if err != nil {
+			if isManilaErrNotFound(err) {
+				return extraSpecs, err
+			}
+
+			return extraSpecs, fmt.Errorf("failed to get share type ID for share type %s: %v", shareType, err)
+		}
+
+		return manilaClient.GetExtraSpecs(id)
+	}
+
+	return extraSpecs, err
+}
+
+// Chooses one ExportLocation according to the below rules:
+// 1. Path is not empty
+// 2. IsAdminOnly == false
+// 3. Preferred == true are preferred over Preferred == false
+// 4. Locations with lower slice index are preferred over locations with higher slice index
+func chooseExportLocation(locs []shares.ExportLocation) (shares.ExportLocation, error) {
+	if len(locs) == 0 {
+		return shares.ExportLocation{}, fmt.Errorf("export locations list is empty")
+	}
+
+	var (
+		foundMatchingNotPreferred = false
+		matchingNotPreferred      shares.ExportLocation
+	)
+
+	for _, loc := range locs {
+		if loc.IsAdminOnly || strings.TrimSpace(loc.Path) == "" {
+			continue
+		}
+
+		if loc.Preferred {
+			return loc, nil
+		}
+
+		if !foundMatchingNotPreferred {
+			matchingNotPreferred = loc
+			foundMatchingNotPreferred = true
+		}
+	}
+
+	if foundMatchingNotPreferred {
+		return matchingNotPreferred, nil
+	}
+
+	return shares.ExportLocation{}, fmt.Errorf("cannot find any non-admin export location")
+}
+
+func getChosenExportLocation(shareID string, manilaClient manilaclient.Interface) (*shares.ExportLocation, error) {
+	availableExportLocations, err := manilaClient.GetExportLocations(shareID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to retrieve export locations for share %s: %v", shareID, err)
+	}
+
+	chosenExportLocation, err := chooseExportLocation(availableExportLocations)
+	if err != nil {
+		return nil, fmt.Errorf("failed to choose an export location for share %s: %v", shareID, err)
+	}
+
+	return &chosenExportLocation, err
+}
+
+func getAccessRightByID(shareID, accessRightID string, manilaClient manilaclient.Interface) (*shares.AccessRight, error) {
+	accessRights, err := manilaClient.GetAccessRights(shareID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list access rights for share %s: %v", shareID, err)
+	}
+
+	for i := range accessRights {
+		if accessRights[i].ID == accessRightID {
+			return &accessRights[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("no access right %s for share %s found", accessRightID, shareID)
+}
+
+func tryGetCompatibilityMode(compatOpts *options.CompatibilityOptions, shareOpts *options.ControllerVolumeContext, source *csi.VolumeContentSource, shareTypeCaps manilaCapabilities) compatibilityHandler {
+	if source != nil {
+		if source.GetSnapshot() != nil && shareTypeCaps[manilaCapabilitySnapshot] {
+			if createShareFromSnapshotEnabled, _ := strconv.ParseBool(compatOpts.CreateShareFromSnapshotEnabled); createShareFromSnapshotEnabled {
+				return useCompatibilityMode(shareOpts.Protocol, manilaCapabilityShareFromSnapshot, shareTypeCaps)
+			}
+		}
+	}
+
+	return nil
+}
+
 //
 // Controller service request validation
 //
@@ -268,7 +369,7 @@ func validateDeleteSnapshotRequest(req *csi.DeleteSnapshotRequest) error {
 	return nil
 }
 
-func verifyVolumeCompatibility(sizeInGiB int, req *csi.CreateVolumeRequest, share *shares.Share, shareOpts *options.ControllerVolumeContext) error {
+func verifyVolumeCompatibility(sizeInGiB int, req *csi.CreateVolumeRequest, share *shares.Share, shareOpts *options.ControllerVolumeContext, compatOpts *options.CompatibilityOptions, shareTypeCaps manilaCapabilities) error {
 	coalesceValue := func(v string) string {
 		if v == "" {
 			return "<none>"
@@ -302,7 +403,9 @@ func verifyVolumeCompatibility(sizeInGiB int, req *csi.CreateVolumeRequest, shar
 	}
 
 	if share.SnapshotID != reqSrcSnapID {
-		return fmt.Errorf("source snapshot ID mismatch: wanted %s, got %s", coalesceValue(share.SnapshotID), coalesceValue(reqSrcSnapID))
+		if tryGetCompatibilityMode(compatOpts, shareOpts, req.GetVolumeContentSource(), shareTypeCaps) == nil || share.SnapshotID != "" {
+			return fmt.Errorf("source snapshot ID mismatch: wanted %s, got %s", coalesceValue(share.SnapshotID), coalesceValue(reqSrcSnapID))
+		}
 	}
 
 	return nil
