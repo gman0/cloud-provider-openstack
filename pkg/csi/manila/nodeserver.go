@@ -18,7 +18,6 @@ package manila
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 
@@ -85,43 +84,23 @@ func (ns *nodeServer) buildVolumeContext(volID volumeID, shareOpts *options.Node
 
 	// Get export locations and choose one
 
-	availableExportLocations, err := manilaClient.GetExportLocations(share.ID)
+	chosenExportLocation, err := getChosenExportLocation(share.ID, manilaClient)
 	if err != nil {
-		return nil, nil, status.Errorf(codes.Internal, "failed to retrieve export locations for volume %s (share ID %s): %v",
-			volID, share.ID, err)
-	}
-
-	chosenExportLocation, err := chooseExportLocation(availableExportLocations)
-	if err != nil {
-		return nil, nil, status.Errorf(codes.Internal, "failed to choose an export locations for volume %s (share ID %s): %v",
-			volID, share.ID, err)
-	}
-
-	accessRights, err := manilaClient.GetAccessRights(share.ID)
-	if err != nil {
-		return nil, nil, status.Errorf(codes.Internal, "failed to list access rights for volume %s (share ID %s): %v",
-			volID, share.ID, err)
+		return nil, nil, status.Errorf(codes.Internal, "failed to resolve export location for volume %s: %v", volID, err)
 	}
 
 	// Get the access right for this share
 
-	for i := range accessRights {
-		if accessRights[i].ID == shareOpts.ShareAccessID {
-			accessRight = &accessRights[i]
-			break
-		}
-	}
-
-	if accessRight == nil {
-		return nil, nil, status.Errorf(codes.InvalidArgument, "cannot find access right %s for volume %s (share ID %s)",
-			shareOpts.ShareAccessID, volID, share.ID)
+	accessRight, err = getAccessRightByID(share.ID, shareOpts.ShareAccessID, manilaClient)
+	if err != nil {
+		return nil, nil, status.Errorf(codes.InvalidArgument, "cannot find access right %s for volume %s: %v", volID, err)
 	}
 
 	// Build volume context for fwd plugin
 
 	sa := getShareAdapter(ns.d.shareProto)
 
-	volumeContext, err = sa.BuildVolumeContext(&shareadapters.VolumeContextArgs{Location: &chosenExportLocation, Options: shareOpts})
+	volumeContext, err = sa.BuildVolumeContext(&shareadapters.VolumeContextArgs{Location: chosenExportLocation, Options: shareOpts})
 	if err != nil {
 		return nil, nil, status.Errorf(codes.InvalidArgument, "failed to build volume context for volume %s: %v", volID, err)
 	}
@@ -320,41 +299,4 @@ func (ns *nodeServer) NodeGetVolumeStats(ctx context.Context, req *csi.NodeGetVo
 
 func (ns *nodeServer) NodeExpandVolume(ctx context.Context, req *csi.NodeExpandVolumeRequest) (*csi.NodeExpandVolumeResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "")
-}
-
-// Chooses one ExportLocation according to the below rules:
-// 1. Path is not empty
-// 2. IsAdminOnly == false
-// 3. Preferred == true are preferred over Preferred == false
-// 4. Locations with lower slice index are preferred over locations with higher slice index
-func chooseExportLocation(locs []shares.ExportLocation) (shares.ExportLocation, error) {
-	if len(locs) == 0 {
-		return shares.ExportLocation{}, fmt.Errorf("export locations list is empty")
-	}
-
-	var (
-		foundMatchingNotPreferred = false
-		matchingNotPreferred      shares.ExportLocation
-	)
-
-	for _, loc := range locs {
-		if loc.IsAdminOnly || strings.TrimSpace(loc.Path) == "" {
-			continue
-		}
-
-		if loc.Preferred {
-			return loc, nil
-		}
-
-		if !foundMatchingNotPreferred {
-			matchingNotPreferred = loc
-			foundMatchingNotPreferred = true
-		}
-	}
-
-	if foundMatchingNotPreferred {
-		return matchingNotPreferred, nil
-	}
-
-	return shares.ExportLocation{}, fmt.Errorf("cannot find any non-admin export location")
 }

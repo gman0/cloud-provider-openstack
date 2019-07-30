@@ -56,11 +56,7 @@ var (
 
 func NewOpenstackOptions(data map[string]string) (*OpenstackOptions, error) {
 	opts := &OpenstackOptions{}
-	if err := osOptionsValidator.Populate(data, opts); err != nil {
-		return nil, err
-	}
-
-	return opts, nil
+	return opts, osOptionsValidator.Populate(data, opts)
 }
 
 func (o *OpenstackOptions) ToAuthOptions() *gophercloud.AuthOptions {

@@ -48,18 +48,10 @@ var (
 
 func NewControllerVolumeContext(data map[string]string) (*ControllerVolumeContext, error) {
 	opts := &ControllerVolumeContext{}
-	if err := controllerVolumeCtxValidator.Populate(data, opts); err != nil {
-		return nil, err
-	}
-
-	return opts, nil
+	return opts, controllerVolumeCtxValidator.Populate(data, opts)
 }
 
 func NewNodeVolumeContext(data map[string]string) (*NodeVolumeContext, error) {
 	opts := &NodeVolumeContext{}
-	if err := nodeVolumeCtxValidator.Populate(data, opts); err != nil {
-		return nil, err
-	}
-
-	return opts, nil
+	return opts, nodeVolumeCtxValidator.Populate(data, opts)
 }
