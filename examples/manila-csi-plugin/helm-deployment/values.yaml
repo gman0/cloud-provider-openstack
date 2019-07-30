@@ -7,10 +7,19 @@ shareProtocols:
     fwdNodePluginEndpoint:
       dir: /var/lib/kubelet/plugins/csi-nfsplugin
       sockFile: csi.sock
-#  - protocolSelector: CEPHFS
-#    fwdNodePluginEndpoint:
-#      dir: /var/lib/kubelet/plugins/csi-cephfsplugin
-#      sockFile: csi.sock
+  - protocolSelector: CEPHFS
+    fwdNodePluginEndpoint:
+      dir: /var/lib/kubelet/plugins/cephfs.csi.ceph.com
+      sockFile: csi.sock
+    compatibilitySettings: "CreateShareFromSnapshotEnabled=true,CreateShareFromSnapshotCephFSMounts=/manila-cephfs-shares,CreateShareFromSnapshotCephFSLogErrorsToFile=true"
+
+# Relevant for CEPHFS share protocol with CreateShareFromSnapshotEnabled=true compatibility setting:
+# During snapshot recovery, CSI Manila may need to mount a blank CephFS share (via CSI CephFS).
+# A bidirectional mount point for CephFS mounts must be specified in order to support CephFS snapshots.
+# Must be identical to the path specified in CreateShareFromSnapshotCephFSMounts compatibility setting.
+# Note that this path must be also mounted with bidirectional mount propagation in the CSI CephFS node plugin
+# on the same node where CSI Manila's provisioner is running.
+cephfsBidirectionalMountpoint: /manila-cephfs-shares
 
 # CSI Manila image spec
 csimanila:
