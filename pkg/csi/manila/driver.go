@@ -31,6 +31,7 @@ import (
 	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
 	"k8s.io/klog"
 )
 
@@ -42,6 +43,8 @@ type Driver struct {
 
 	serverEndpoint string
 	fwdEndpoint    string
+
+	compatOpts *options.CompatibilityOptions
 
 	ids *identityServer
 	cs  *controllerServer
@@ -75,7 +78,7 @@ func argNotEmpty(val, name string) error {
 	return nil
 }
 
-func NewDriver(nodeID, driverName, endpoint, fwdEndpoint, shareProto string, manilaClientBuilder manilaclient.Builder) (*Driver, error) {
+func NewDriver(nodeID, driverName, endpoint, fwdEndpoint, shareProto string, manilaClientBuilder manilaclient.Builder, compatOpts *options.CompatibilityOptions) (*Driver, error) {
 	for k, v := range map[string]string{"node ID": nodeID, "driver name": driverName, "driver endpoint": endpoint, "FWD endpoint": fwdEndpoint, "share protocol selector": shareProto} {
 		if err := argNotEmpty(v, k); err != nil {
 			return nil, err
@@ -91,6 +94,7 @@ func NewDriver(nodeID, driverName, endpoint, fwdEndpoint, shareProto string, man
 		fwdEndpoint:         fwdEndpoint,
 		shareProto:          strings.ToUpper(shareProto),
 		manilaClientBuilder: manilaClientBuilder,
+		compatOpts:          compatOpts,
 	}
 
 	getShareAdapter(d.shareProto) // The program will terminate with a non-zero exit code if the share protocol selector is wrong

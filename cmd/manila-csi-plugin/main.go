@@ -20,11 +20,13 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
 	"k8s.io/component-base/logs"
 	"k8s.io/klog"
 )
@@ -36,7 +38,46 @@ var (
 	protoSelector string
 	fwdEndpoint   string
 	userAgentData []string
+	compatibility string
 )
+
+func parseCompatOpts() (*options.CompatibilityOptions, error) {
+	data := make(map[string]string)
+
+	if compatibility == "" {
+		return options.NewCompatibilityOptions(data)
+	}
+
+	knownCompatSettings := map[string]interface{}{
+		"CreateShareFromSnapshotEnabled":               nil,
+		"CreateShareFromSnapshotRetries":               nil,
+		"CreateShareFromSnapshotBackoffInterval":       nil,
+		"CreateShareFromSnapshotCephFSMounts":          nil,
+		"CreateShareFromSnapshotCephFSLogErrorsToFile": nil,
+	}
+
+	isKnown := func(v string) bool {
+		_, ok := knownCompatSettings[v]
+		return ok
+	}
+
+	settings := strings.Split(compatibility, ",")
+	for _, elem := range settings {
+		setting := strings.SplitN(elem, "=", 2)
+
+		if len(setting) != 2 || setting[0] == "" || setting[1] == "" {
+			return nil, fmt.Errorf("invalid format in option %v, expected KEY=VALUE", setting)
+		}
+
+		if !isKnown(setting[0]) {
+			return nil, fmt.Errorf("unrecognized option '%s'", setting[0])
+		}
+
+		data[setting[0]] = setting[1]
+	}
+
+	return options.NewCompatibilityOptions(data)
+}
 
 func main() {
 	flag.CommandLine.Parse([]string{})
@@ -63,7 +104,12 @@ func main() {
 			})
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			d, err := manila.NewDriver(nodeID, driverName, endpoint, fwdEndpoint, protoSelector, &manilaclient.ClientBuilder{UserAgentData: userAgentData})
+			compatOpts, err := parseCompatOpts()
+			if err != nil {
+				klog.Fatalf("failed to parse compatibility settings: %v", err)
+			}
+
+			d, err := manila.NewDriver(nodeID, driverName, endpoint, fwdEndpoint, protoSelector, &manilaclient.ClientBuilder{UserAgentData: userAgentData}, compatOpts)
 			if err != nil {
 				klog.Fatalf("driver initialization failed: %v", err)
 			}
@@ -90,6 +136,8 @@ func main() {
 	cmd.MarkPersistentFlagRequired("fwdendpoint")
 
 	cmd.PersistentFlags().StringArrayVar(&userAgentData, "user-agent", nil, "extra data to add to gophercloud user-agent. Use multiple times to add more than one component.")
+
+	cmd.PersistentFlags().StringVar(&compatibility, "compatibility-settings", "", "settings for the compatibility layer")
 
 	logs.InitLogs()
 	defer logs.FlushLogs()
