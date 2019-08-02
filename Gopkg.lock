@@ -246,7 +246,7 @@
 
 [[projects]]
   branch = "master"
-  digest = "1:9d3c11e81acc4239fb51ce0d8541e1c7e2c0df441e3684cda30bcdd71fa40c0f"
+  digest = "1:bd757f9cd2d17b0cac231c53d69f1f5c9fd499291987e181ec5536e580800f0c"
   name = "github.com/gophercloud/gophercloud"
   packages = [
     ".",
@@ -290,6 +290,7 @@
     "openstack/sharedfilesystems/apiversions",
     "openstack/sharedfilesystems/v2/messages",
     "openstack/sharedfilesystems/v2/shares",
+    "openstack/sharedfilesystems/v2/sharetypes",
     "openstack/sharedfilesystems/v2/snapshots",
     "openstack/utils",
     "pagination",
@@ -297,7 +298,7 @@
     "testhelper/client",
   ]
   pruneopts = "UT"
-  revision = "e87e5f90e7e67a309e0fe96dac144b824447607f"
+  revision = "ef348b6550902eca77d61502a1feb1d2afbfda35"
 
 [[projects]]
   branch = "master"
@@ -1654,6 +1655,7 @@
     "github.com/gophercloud/gophercloud/openstack/sharedfilesystems/apiversions",
     "github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/messages",
     "github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/shares",
+    "github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/sharetypes",
     "github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/snapshots",
     "github.com/gophercloud/gophercloud/openstack/utils",
     "github.com/gophercloud/gophercloud/pagination",
