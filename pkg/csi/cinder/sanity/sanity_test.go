@@ -1,8 +1,6 @@
 package sanity
 
 import (
-	"io/ioutil"
-	"os"
 	"testing"
 
 	"k8s.io/cloud-provider-openstack/pkg/csi/cinder"
@@ -12,7 +10,6 @@ import (
 
 //start sanity test for driver
 func TestDriver(t *testing.T) {
-
 	socket := "/tmp/csi.sock"
 	endpoint := "unix://" + socket
 	cluster := "kubernetes"
@@ -25,25 +22,13 @@ func TestDriver(t *testing.T) {
 
 	d.SetupDriver(c, fakemnt, fakemet)
 
-	//TODO: Stop call
+	// TODO: Stop call
 
 	go d.Run()
 
-	mntDir, err := ioutil.TempDir("", "mnt")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(mntDir)
-
-	mntStageDir, err := ioutil.TempDir("", "mnt-stage")
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer os.RemoveAll(mntStageDir)
-
 	config := &sanity.Config{
-		TargetPath:  mntDir,
-		StagingPath: mntStageDir,
+		TargetPath:  "/tmp/cinder-mnt",
+		StagingPath: "/tmp/cinder-mnt-stage",
 		Address:     endpoint,
 	}
 
