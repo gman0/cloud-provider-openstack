@@ -17,6 +17,7 @@ limitations under the License.
 package sanity
 
 import (
+	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/sharetypes"
 	"strconv"
 
 	"github.com/gophercloud/gophercloud"
@@ -39,11 +40,27 @@ var (
 
 type fakeManilaClientBuilder struct{}
 
-func (b fakeManilaClientBuilder) New(o *options.OpenstackOptions) (manilaclient.Interface, error) {
+func (c fakeManilaClientBuilder) New(o *options.OpenstackOptions) (manilaclient.Interface, error) {
 	return &fakeManilaClient{}, nil
 }
 
 type fakeManilaClient struct{}
+
+func (c fakeManilaClient) SetShareMetadata(shareID string, opts shares.SetMetadataOptsBuilder) (map[string]string, error) {
+	return nil, nil
+}
+
+func (c fakeManilaClient) GetExtraSpecs(shareTypeID string) (sharetypes.ExtraSpecs, error) {
+	return nil, nil
+}
+
+func (c fakeManilaClient) GetShareTypes() ([]sharetypes.ShareType, error) {
+	return nil, nil
+}
+
+func (c fakeManilaClient) GetShareTypeIDFromName(shareTypeName string) (string, error) {
+	return "", nil
+}
 
 func optsMapToStruct(optsMap map[string]interface{}, dst interface{}) error {
 	res := gophercloud.Result{Body: optsMap}
