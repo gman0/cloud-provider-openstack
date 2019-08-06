@@ -17,6 +17,7 @@ limitations under the License.
 package sanity
 
 import (
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
 	"os"
 	"path"
 	"testing"
@@ -37,7 +38,7 @@ func TestDriver(t *testing.T) {
 	endpoint := path.Join(basePath, "csi.sock")
 	fwdEndpoint := "unix:///fake-fwd-endpoint"
 
-	d, err := manila.NewDriver("node", "fake.csi.manila.openstack.org", endpoint, fwdEndpoint, "NFS", &fakeManilaClientBuilder{}, &fakeCSIClientBuilder{})
+	d, err := manila.NewDriver("node", "fake.csi.manila.openstack.org", endpoint, fwdEndpoint, "NFS", &fakeManilaClientBuilder{}, &fakeCSIClientBuilder{}, &options.CompatibilityOptions{})
 	if err != nil {
 		t.Fatalf("failed to initialize CSI Manila driver: %v", err)
 	}
