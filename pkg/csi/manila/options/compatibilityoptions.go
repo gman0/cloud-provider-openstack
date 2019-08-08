@@ -16,9 +16,11 @@ package options
 import "k8s.io/cloud-provider-openstack/pkg/share/manila/shareoptions/validator"
 
 type CompatibilityOptions struct {
-	CreateShareFromSnapshotEnabled         string `name:"CreateShareFromSnapshotEnabled" value:"default:false" matches:"^true|false$"`
-	CreateShareFromSnapshotRetries         string `name:"CreateShareFromSnapshotRetries" value:"default:10" matches:"^\d+$"`
-	CreateShareFromSnapshotBackoffInterval string `name:"CreateShareFromSnapshotBackoffInterval" value:"default:5" matches:"^\d+$"`
+	CreateShareFromSnapshotEnabled               string `name:"CreateShareFromSnapshotEnabled" value:"default:false" matches:"^true|false$"`
+	CreateShareFromSnapshotRetries               string `name:"CreateShareFromSnapshotRetries" value:"default:10" matches:"^\d+$"`
+	CreateShareFromSnapshotBackoffInterval       string `name:"CreateShareFromSnapshotBackoffInterval" value:"default:5" matches:"^\d+$"`
+	CreateShareFromSnapshotCephFSMounts          string `name:"CreateShareFromSnapshotCephFSMounts" value:"optional"`
+	CreateShareFromSnapshotCephFSLogErrorsToFile string `name:"CreateShareFromSnapshotCephFSLogErrorsToFile" value:"default:false" matches:"^true|false$"`
 }
 
 var (

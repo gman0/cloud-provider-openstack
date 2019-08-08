@@ -62,7 +62,13 @@ func parseCompatOpts() (*options.CompatibilityOptions, error) {
 		return options.NewCompatibilityOptions(data)
 	}
 
-	knownCompatSettings := map[string]interface{}{}
+	knownCompatSettings := map[string]interface{}{
+		"CreateShareFromSnapshotEnabled":               nil,
+		"CreateShareFromSnapshotRetries":               nil,
+		"CreateShareFromSnapshotBackoffInterval":       nil,
+		"CreateShareFromSnapshotCephFSMounts":          nil,
+		"CreateShareFromSnapshotCephFSLogErrorsToFile": nil,
+	}
 
 	isKnown := func(v string) bool {
 		_, ok := knownCompatSettings[v]
