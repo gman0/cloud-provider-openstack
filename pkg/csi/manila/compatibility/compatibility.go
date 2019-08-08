@@ -26,10 +26,20 @@ type Layer interface {
 	SupplementCapability(compatOpts *options.CompatibilityOptions, dstShare *shares.Share, dstShareAccessRight *shares.AccessRight, req *csi.CreateVolumeRequest, fwdEndpoint string, manilaClient manilaclient.Interface, csiClientBuilder csiclient.Builder) error
 }
 
+const (
+	CreatedFromSnapshotTag     = "manila.csi.openstack.org/created-from-snapshot"
+	CreatedFromSnapshotPending = "PENDING"
+	CreatedFromSnapshotFailed  = "FAILED"
+)
+
 // Certain share protocols may not support certain Manila capabilities
 // in a given share type. This map forms a compatibility layer which
 // fills in the feature gap with in-driver functionality.
-var compatCaps = map[string]map[capabilities.ManilaCapability]Layer{}
+var compatCaps = map[string]map[capabilities.ManilaCapability]Layer{
+	"CEPHFS": {
+		capabilities.ManilaCapabilityShareFromSnapshot: &CephfsCreateShareFromSnapshot{},
+	},
+}
 
 func FindCompatibilityLayer(shareProto string, wantsCap capabilities.ManilaCapability, shareTypeCaps capabilities.ManilaCapabilities) Layer {
 	if layers, ok := compatCaps[shareProto]; ok {
