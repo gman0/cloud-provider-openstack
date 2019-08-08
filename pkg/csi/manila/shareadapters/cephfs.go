@@ -86,8 +86,6 @@ func (Cephfs) GetOrGrantAccess(args *GrantAccessArgs) (accessRight *shares.Acces
 			return false, err
 		}
 
-		var accessRight *shares.AccessRight
-
 		for i := range rights {
 			if rights[i].AccessTo == args.Share.Name {
 				accessRight = &rights[i]
