@@ -299,7 +299,12 @@ func verifyVolumeCompatibility(sizeInGiB int, req *csi.CreateVolumeRequest, shar
 		reqSrcSnapID = req.GetVolumeContentSource().GetSnapshot().GetSnapshotId()
 	}
 
-	if share.SnapshotID != reqSrcSnapID {
+	srcSnapID := share.SnapshotID
+	if srcSnapID == "" {
+		srcSnapID = share.Metadata[compatibility.CreatedFromSnapshotTag]
+	}
+
+	if srcSnapID != reqSrcSnapID {
 		return fmt.Errorf("source snapshot ID mismatch: wanted %s, got %s", coalesceValue(share.SnapshotID), coalesceValue(reqSrcSnapID))
 	}
 

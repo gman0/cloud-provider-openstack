@@ -30,6 +30,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/capabilities"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/compatibility"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/responsebroker"
@@ -206,12 +207,6 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 }
 
 func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	if cs.d.shareProto == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Creating CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.InvalidArgument, "the driver doesn't support snapshotting CephFS shares yet")
-	}
-
 	if err := validateCreateSnapshotRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -234,10 +229,11 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	var (
 		res = &requestResult{}
 
-		manilaClient manilaclient.Interface
-		sourceShare  *shares.Share
-		snapshot     *snapshots.Snapshot
-		ctime        *timestamp.Timestamp
+		manilaClient  manilaclient.Interface
+		sourceShare   *shares.Share
+		snapshot      *snapshots.Snapshot
+		ctime         *timestamp.Timestamp
+		shareTypeCaps capabilities.ManilaCapabilities
 	)
 
 	defer writeResponse(handle, rbSnapshotID, req.GetName(), res)
@@ -260,6 +256,22 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	if strings.ToUpper(sourceShare.ShareProto) != cs.d.shareProto {
 		return nil, status.Errorf(codes.InvalidArgument, "share protocol mismatch: requested a snapshot of %s share %s, but share protocol selector is set to %s",
 			sourceShare.ShareProto, req.GetSourceVolumeId(), cs.d.shareProto)
+	}
+
+	// Make sure snapshotting and creating shares from snapshots is supported by this share type
+
+	if shareTypeCaps, res.err = capabilities.GetManilaCapabilities(sourceShare.ShareType, manilaClient); res.err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get Manila capabilities for share type %s: %v", sourceShare.ShareType, res.err)
+	}
+
+	if !shareTypeCaps[capabilities.ManilaCapabilitySnapshot] {
+		return nil, status.Errorf(codes.InvalidArgument, "share type %s does not advertise snapshot_support capability", sourceShare.ShareType)
+	}
+
+	if !shareTypeCaps[capabilities.ManilaCapabilityShareFromSnapshot] {
+		if compatibility.FindCompatibilityLayer(sourceShare.ShareProto, capabilities.ManilaCapabilityShareFromSnapshot, shareTypeCaps) == nil {
+			return nil, status.Errorf(codes.InvalidArgument, "share type %s does not advertise create_share_from_snapshot_support capability", sourceShare.ShareType)
+		}
 	}
 
 	// Retrieve an existing snapshot or create a new one
@@ -327,12 +339,6 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 }
 
 func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	if cs.d.shareProto == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Deleting CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.InvalidArgument, "the driver doesn't support CephFS snapshots yet")
-	}
-
 	if err := validateDeleteSnapshotRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
