@@ -95,6 +95,11 @@ spec:
             - name: pod-mounts
               mountPath: /var/lib/kubelet/pods
               mountPropagation: Bidirectional
+            {{- if (eq (.protocolSelector | upper) "CEPHFS") and $.Values.cephfsBidirectionalMountpoint }}
+            - name: cephfs-mounts
+              mountPath: {{ $.Values.cephfsBidirectionalMountpoint }}
+              mountPropagation: Bidirectional
+            {{- end }}
           resources:
 {{ toYaml $.Values.controllerplugin.nodeplugin.resources | indent 12 }}
         {{- end }}
@@ -113,6 +118,12 @@ spec:
           hostPath:
             path: /var/lib/kubelet/pods
             type: Directory
+        {{- if $.Values.cephfsBidirectionalMountpoint }}
+        - name: cephfs-mounts
+          hostPath:
+            path: {{ $.Values.cephfsBidirectionalMountpoint }}
+            type: DirectoryOrCreate
+        {{- end -}}
     {{- if .Values.controllerplugin.affinity -}}
       affinity:
 {{ toYaml .Values.controllerplugin.affinity . | indent 8 }}
