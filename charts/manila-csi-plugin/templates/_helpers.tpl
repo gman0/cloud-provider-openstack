@@ -30,14 +30,14 @@ We truncate at 63 chars because some Kubernetes name fields are limited to this 
 If release name contains chart name it will be used as a full name.
 */}}
 {{- define "openstack-manila-csi.nodeplugin.fullname" -}}
-{{- if .Values.nodeplugin.fullnameOverride -}}
-{{- .Values.nodeplugin.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- if .Values.csi.plugin.nodeplugin.fullnameOverride -}}
+{{- .Values.csi.plugin.nodeplugin.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- $name := default .Chart.Name .Values.nameOverride -}}
 {{- if contains $name .Release.Name -}}
-{{- printf "%s-%s" .Release.Name .Values.nodeplugin.name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-nodeplugin" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s-%s" .Release.Name $name .Values.nodeplugin.name  | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s-nodeplugin" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}
@@ -55,14 +55,14 @@ We truncate at 63 chars because some Kubernetes name fields are limited to this 
 If release name contains chart name it will be used as a full name.
 */}}
 {{- define "openstack-manila-csi.controllerplugin.fullname" -}}
-{{- if .Values.controllerplugin.fullnameOverride -}}
-{{- .Values.controllerplugin.fullnameOverride | trunc 63 | trimSuffix "-" -}}
+{{- if .Values.csi.plugin.controllerplugin.fullnameOverride -}}
+{{- .Values.csi.plugin.controllerplugin.fullnameOverride | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
 {{- $name := default .Chart.Name .Values.nameOverride -}}
 {{- if contains $name .Release.Name -}}
-{{- printf "%s-%s" .Release.Name .Values.controllerplugin.name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-controllerplugin" .Release.Name | trunc 63 | trimSuffix "-" -}}
 {{- else -}}
-{{- printf "%s-%s-%s" .Release.Name $name .Values.controllerplugin.name | trunc 63 | trimSuffix "-" -}}
+{{- printf "%s-%s-controllerplugin" .Release.Name $name | trunc 63 | trimSuffix "-" -}}
 {{- end -}}
 {{- end -}}
 {{- end -}}

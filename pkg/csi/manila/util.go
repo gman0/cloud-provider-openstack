@@ -27,10 +27,12 @@ import (
 	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/shares"
 	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/snapshots"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/capabilities"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/compatibility"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/shareadapters"
 	"k8s.io/klog/v2"
 )
 
@@ -119,6 +121,11 @@ func endpointAddress(proto, addr string) string {
 
 func fmtGrpcConnError(fwdEndpoint string, err error) string {
 	return fmt.Sprintf("connecting to fwd plugin at %s failed: %v", fwdEndpoint, err)
+}
+
+func fmtGrpcStatusError(err error, pluginInfo *shareadapters.CSINodePluginInfo) error {
+	statusErr, _ := status.FromError(err)
+	return status.Errorf(statusErr.Code(), "%s: %v", pluginInfo.Name, statusErr.Message())
 }
 
 func bytesToGiB(sizeInBytes int64) int {
@@ -252,7 +259,7 @@ func verifyVolumeCompatibility(sizeInGiB int, req *csi.CreateVolumeRequest, shar
 		return fmt.Errorf("size mismatch: wanted %d, got %d", share.Size, sizeInGiB)
 	}
 
-	if share.ShareProto != shareOpts.Protocol {
+	if strings.ToUpper(share.ShareProto) != strings.ToUpper(shareOpts.Protocol) {
 		return fmt.Errorf("share protocol mismatch: wanted %s, got %s", coalesceValue(share.ShareProto), coalesceValue(shareOpts.Protocol))
 	}
 
@@ -308,6 +315,10 @@ func validateValidateVolumeCapabilitiesRequest(req *csi.ValidateVolumeCapabiliti
 //
 
 func validateNodeStageVolumeRequest(req *csi.NodeStageVolumeRequest) error {
+	if req.GetStagingTargetPath() == "" {
+		return errors.New("staging target path missing in request")
+	}
+
 	if req.GetVolumeCapability() == nil {
 		return errors.New("volume capability missing in request")
 	}
@@ -340,6 +351,14 @@ func validateNodeUnstageVolumeRequest(req *csi.NodeUnstageVolumeRequest) error {
 }
 
 func validateNodePublishVolumeRequest(req *csi.NodePublishVolumeRequest) error {
+	if req.GetTargetPath() == "" {
+		return errors.New("target path missing in request")
+	}
+
+	if req.GetStagingTargetPath() == "" {
+		return errors.New("staging path missing in request")
+	}
+
 	if req.GetVolumeCapability() == nil {
 		return errors.New("volume capability missing in request")
 	}

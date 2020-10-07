@@ -18,40 +18,13 @@ package csiclient
 
 import (
 	"context"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc"
-	"k8s.io/klog/v2"
-	"sync/atomic"
-	"time"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/grpcutils"
 )
 
-var (
-	grpcCallCounter uint64
-
-	dialOptions = []grpc.DialOption{
-		grpc.WithInsecure(),
-		grpc.WithBackoffMaxDelay(time.Second),
-		grpc.WithBlock(),
-		grpc.WithUnaryInterceptor(func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
-			callID := atomic.AddUint64(&grpcCallCounter, 1)
-
-			klog.V(3).Infof("[ID:%d] FWD GRPC call: %s", callID, method)
-			klog.V(5).Infof("[ID:%d] FWD GRPC request: %s", callID, protosanitizer.StripSecrets(req))
-
-			err := invoker(ctx, method, req, reply, cc, opts...)
-			if err != nil {
-				klog.Infof("[ID:%d] FWD GRPC error: %v", callID, err)
-			} else {
-				klog.V(5).Infof("[ID:%d] FWD GRPC response: %s", callID, protosanitizer.StripSecrets(reply))
-			}
-
-			return err
-		}),
-	}
-
-	_ Builder = &ClientBuilder{}
-)
+var _ Builder = &ClientBuilder{}
 
 func NewNodeSvcClient(conn *grpc.ClientConn) *NodeSvcClient {
 	return &NodeSvcClient{cl: csi.NewNodeClient(conn)}
@@ -61,43 +34,16 @@ func NewIdentitySvcClient(conn *grpc.ClientConn) *IdentitySvcClient {
 	return &IdentitySvcClient{cl: csi.NewIdentityClient(conn)}
 }
 
-func NewConnection(endpoint string) (*grpc.ClientConn, error) {
-	var (
-		conn *grpc.ClientConn
-		err  error
-	)
-
-	dialFinished := make(chan bool)
-	go func() {
-		conn, err = grpc.Dial(endpoint, dialOptions...)
-		close(dialFinished)
-	}()
-
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
-	for {
-		select {
-		case <-ticker.C:
-			klog.Warningf("still connecting to %s", endpoint)
-		case <-dialFinished:
-			return conn, err
-		}
-	}
-}
-
-func NewConnectionWithContext(ctx context.Context, endpoint string) (*grpc.ClientConn, error) {
-	return grpc.DialContext(ctx, endpoint, dialOptions...)
-}
-
 type ClientBuilder struct{}
 
 func (b ClientBuilder) NewConnection(endpoint string) (*grpc.ClientConn, error) {
-	return NewConnection(endpoint)
+	dialOpts := append(grpcutils.DefaultDialOptions, grpc.WithUnaryInterceptor(grpcutils.ClientLogRPCWithLabel(endpoint)))
+	return grpcutils.NewConnection(endpoint, dialOpts...)
 }
 
 func (b ClientBuilder) NewConnectionWithContext(ctx context.Context, endpoint string) (*grpc.ClientConn, error) {
-	return NewConnectionWithContext(ctx, endpoint)
+	dialOpts := append(grpcutils.DefaultDialOptions, grpc.WithUnaryInterceptor(grpcutils.ClientLogRPCWithLabel(endpoint)))
+	return grpcutils.NewConnectionWithContext(ctx, endpoint, dialOpts...)
 }
 
 func (b ClientBuilder) NewNodeServiceClient(conn *grpc.ClientConn) Node {

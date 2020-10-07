@@ -5,13 +5,13 @@ metadata:
   labels:
     app: {{ include "openstack-manila-csi.name" . }}
     chart: {{ include "openstack-manila-csi.chart" . }}
-    component: {{ .Values.controllerplugin.name }}
+    component: controllerplugin
     release: {{ .Release.Name }}
     heritage: {{ .Release.Service }}
 spec:
   selector:
     app: {{ include "openstack-manila-csi.name" . }}
-    component: {{ .Values.controllerplugin.name }}
+    component: controllerplugin
     release: {{ .Release.Name }}
   ports:
     - name: dummy

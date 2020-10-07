@@ -28,9 +28,17 @@ import (
 	"k8s.io/klog/v2"
 )
 
-type NFS struct{}
+type NFS struct {
+	NodePluginInfo *CSINodePluginInfo
+}
 
 var _ ShareAdapter = &NFS{}
+
+func (NFS) Type() ShareAdapterType { return NfsType }
+
+func (NFS) ShareProtocol() string { return "NFS" }
+
+func (adapter NFS) GetCSINodePluginInfo() *CSINodePluginInfo { return adapter.NodePluginInfo }
 
 func (NFS) GetOrGrantAccess(args *GrantAccessArgs) (*shares.AccessRight, error) {
 	// First, check if the access right exists or needs to be created

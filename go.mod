@@ -16,7 +16,7 @@ require (
 	github.com/imdario/mergo v0.3.7 // indirect
 	github.com/kubernetes-csi/csi-lib-utils v0.6.1
 	github.com/kubernetes-csi/csi-test v2.2.0+incompatible
-	github.com/kubernetes-csi/csi-test/v3 v3.1.0
+	github.com/kubernetes-csi/csi-test/v3 v3.1.1
 	github.com/mitchellh/go-homedir v1.1.0
 	github.com/mitchellh/mapstructure v1.1.2
 	github.com/onsi/ginkgo v1.12.0

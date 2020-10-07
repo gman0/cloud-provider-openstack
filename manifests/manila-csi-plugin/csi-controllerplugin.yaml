@@ -73,9 +73,15 @@ spec:
             --v=5
             --nodeid=$(NODE_ID)
             --endpoint=$(CSI_ENDPOINT)
-            --drivername=$(DRIVER_NAME)
-            --share-protocol-selector=$(MANILA_SHARE_PROTO)
-            --fwdendpoint=$(FWD_CSI_ENDPOINT)'
+            --drivername=$(DRIVER_NAME)'
+
+            # Share adapters
+            # Enable share adapters by adding --enable-adapter=name=<ADAPTER NAME>,node-plugin-endpoint=<PARTNER NODE PLUGIN ENDPOINT> repeatedly for each adapter.
+            # Unlike the Node Plugin, the Controller Plugin usually does not mount volumes, so you may omit node-plugin-endpoint parameters.
+            # Example:
+            # --enable-adapter=name=nfs
+            # --enable-adapter=name=cephfs
+            #
             # To enable topology awareness and retrieve compute node AZs from the OpenStack Metadata Service, add the following flags:
             # --with-topology
             # --nodeaz=$(curl http://169.254.169.254/openstack/latest/meta_data.json | jq -r .availability_zone)
@@ -90,16 +96,10 @@ spec:
                   fieldPath: spec.nodeName
             - name: CSI_ENDPOINT
               value: "unix:///var/lib/kubelet/plugins/manila.csi.openstack.org/csi-controllerplugin.sock"
-            - name: FWD_CSI_ENDPOINT
-              value: "unix:///var/lib/kubelet/plugins/FWD-NODEPLUGIN/csi.sock"
-            - name: MANILA_SHARE_PROTO
-              value: "SHARE-PROTOCOL"
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - name: plugin-dir
               mountPath: /var/lib/kubelet/plugins/manila.csi.openstack.org
-            - name: fwd-plugin-dir
-              mountPath: /var/lib/kubelet/plugins/FWD-NODEPLUGIN
             - name: pod-mounts
               mountPath: /var/lib/kubelet/pods
               mountPropagation: Bidirectional
@@ -108,12 +108,7 @@ spec:
           hostPath:
             path: /var/lib/kubelet/plugins/manila.csi.openstack.org
             type: DirectoryOrCreate
-        - name: fwd-plugin-dir
-          hostPath:
-            path: /var/lib/kubelet/plugins/FWD-NODEPLUGIN
-            type: Directory
         - name: pod-mounts
           hostPath:
             path: /var/lib/kubelet/pods
             type: Directory
-

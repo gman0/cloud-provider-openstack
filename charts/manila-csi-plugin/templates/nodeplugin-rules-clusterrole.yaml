@@ -5,7 +5,7 @@ metadata:
   labels:
     app: {{ include "openstack-manila-csi.name" . }}
     chart: {{ include "openstack-manila-csi.chart" . }}
-    component: {{ .Values.nodeplugin.name }}
+    component: nodeplugin
     release: {{ .Release.Name }}
     heritage: {{ .Release.Service }}
     rbac.manila.csi.openstack.org/aggregate-to-{{ include "openstack-manila-csi.nodeplugin.fullname" . }}: "true"

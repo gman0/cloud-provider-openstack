@@ -18,57 +18,79 @@ package manila
 
 import (
 	"context"
+
 	"github.com/container-storage-interface/spec/lib/go/csi"
+	wrappers "github.com/golang/protobuf/ptypes/wrappers"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
+// Implements the CSI Identity service
 type identityServer struct {
-	d *Driver
+	d    *Driver
+	caps []*csi.PluginCapability
+}
+
+func newIdentityServer(d *Driver) *identityServer {
+	serviceCaps := []csi.PluginCapability_Service_Type{
+		csi.PluginCapability_Service_CONTROLLER_SERVICE,
+	}
+
+	if d.WithTopology {
+		serviceCaps = append(serviceCaps, csi.PluginCapability_Service_VOLUME_ACCESSIBILITY_CONSTRAINTS)
+	}
+
+	caps := make([]*csi.PluginCapability, len(serviceCaps))
+
+	for i := range serviceCaps {
+		caps[i] = &csi.PluginCapability{
+			Type: &csi.PluginCapability_Service_{
+				Service: &csi.PluginCapability_Service{
+					Type: serviceCaps[i],
+				},
+			},
+		}
+	}
+
+	return &identityServer{
+		d:    d,
+		caps: caps,
+	}
 }
 
 func (ids *identityServer) GetPluginInfo(ctx context.Context, req *csi.GetPluginInfoRequest) (*csi.GetPluginInfoResponse, error) {
-	if ids.d.name == "" {
-		return nil, status.Error(codes.Unavailable, "Driver name not configured")
-	}
-
 	return &csi.GetPluginInfoResponse{
-		Name:          ids.d.name,
+		Name:          ids.d.DriverName,
 		VendorVersion: ids.d.fqVersion,
 	}, nil
 }
 
 func (ids *identityServer) Probe(ctx context.Context, req *csi.ProbeRequest) (*csi.ProbeResponse, error) {
-	csiConn, err := ids.d.csiClientBuilder.NewConnectionWithContext(ctx, ids.d.fwdEndpoint)
-	if err != nil {
-		return nil, status.Error(codes.FailedPrecondition, fmtGrpcConnError(ids.d.fwdEndpoint, err))
+	// Driver is ready when all its partner Node Plugins are ready
+
+	for _, adapter := range ids.d.enabledAdaptersWithNodePlugins {
+		conn, err := ids.d.CSIClientBuilder.NewConnectionWithContext(ctx, adapter.GetCSINodePluginInfo().Endpoint)
+		if err != nil {
+			return nil, status.Error(codes.FailedPrecondition, fmtGrpcConnError(adapter.GetCSINodePluginInfo().Endpoint, err))
+		}
+		defer conn.Close()
+
+		probeResp, err := ids.d.CSIClientBuilder.NewIdentityServiceClient(conn).Probe(ctx, req)
+		if err != nil {
+			return nil, fmtGrpcStatusError(err, adapter.GetCSINodePluginInfo())
+		}
+
+		if probeResp.GetReady() != nil && !probeResp.GetReady().Value {
+			// If a partner Node Plugin reports not-ready, that means we're not ready either.
+			return &csi.ProbeResponse{Ready: &wrappers.BoolValue{Value: false}}, nil
+		}
 	}
 
-	return ids.d.csiClientBuilder.NewIdentityServiceClient(csiConn).Probe(ctx, req)
+	return &csi.ProbeResponse{Ready: &wrappers.BoolValue{Value: true}}, nil
 }
 
 func (ids *identityServer) GetPluginCapabilities(ctx context.Context, req *csi.GetPluginCapabilitiesRequest) (*csi.GetPluginCapabilitiesResponse, error) {
-	caps := []*csi.PluginCapability{
-		{
-			Type: &csi.PluginCapability_Service_{
-				Service: &csi.PluginCapability_Service{
-					Type: csi.PluginCapability_Service_CONTROLLER_SERVICE,
-				},
-			},
-		},
-	}
-
-	if ids.d.withTopology {
-		caps = append(caps, &csi.PluginCapability{
-			Type: &csi.PluginCapability_Service_{
-				Service: &csi.PluginCapability_Service{
-					Type: csi.PluginCapability_Service_VOLUME_ACCESSIBILITY_CONSTRAINTS,
-				},
-			},
-		})
-	}
-
 	return &csi.GetPluginCapabilitiesResponse{
-		Capabilities: caps,
+		Capabilities: ids.caps,
 	}, nil
 }

@@ -1,4 +1,4 @@
-{{- if .Values.csimanila.runtimeConfig.enabled }}
+{{- if .Values.csi.plugin.runtimeConfig.enabled }}
 apiVersion: v1
 kind: ConfigMap
 metadata:

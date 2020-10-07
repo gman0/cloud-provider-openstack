@@ -27,9 +27,17 @@ import (
 	"k8s.io/klog/v2"
 )
 
-type Cephfs struct{}
+type Cephfs struct {
+	NodePluginInfo *CSINodePluginInfo
+}
 
 var _ ShareAdapter = &Cephfs{}
+
+func (Cephfs) Type() ShareAdapterType { return CephfsType }
+
+func (Cephfs) ShareProtocol() string { return "CEPHFS" }
+
+func (adapter Cephfs) GetCSINodePluginInfo() *CSINodePluginInfo { return adapter.NodePluginInfo }
 
 func (Cephfs) GetOrGrantAccess(args *GrantAccessArgs) (accessRight *shares.AccessRight, err error) {
 	// First, check if the access right exists or needs to be created

@@ -36,6 +36,9 @@ var (
 	fakeShares       = make(map[int]*shares.Share)
 	fakeAccessRights = make(map[int]*shares.AccessRight)
 	fakeSnapshots    = make(map[int]*snapshots.Snapshot)
+
+	_ manilaclient.Builder   = &fakeManilaClientBuilder{}
+	_ manilaclient.Interface = &fakeManilaClient{}
 )
 
 type fakeManilaClientBuilder struct{}

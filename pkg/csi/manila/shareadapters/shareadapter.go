@@ -17,6 +17,7 @@ limitations under the License.
 package shareadapters
 
 import (
+	"github.com/container-storage-interface/spec/lib/go/csi"
 	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/shares"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
@@ -40,7 +41,25 @@ type SecretArgs struct {
 	AccessRight *shares.AccessRight
 }
 
+type CSINodePluginInfo struct {
+	Endpoint     string // UNIX socket path
+	Name         string // Driver name
+	Version      string // Driver version
+	Capabilities map[csi.NodeServiceCapability_RPC_Type]struct{}
+}
+
 type ShareAdapter interface {
+	// Type returns the ShareAdapterType for this adapter
+	Type() ShareAdapterType
+
+	// ShareProtocol returns the share protocol
+	ShareProtocol() string
+
+	// GetCSINodePluginInfo returns info about the partner Node Plugin that's associated with this share adapter.
+	// This may be used in various node-related operations.
+	// May return nil to signal this share adapter does not interact with the Node service.
+	GetCSINodePluginInfo() *CSINodePluginInfo
+
 	// GetOrGrantAccess first tries to retrieve an access right for args.Share.
 	// An access right is created for the share in case it doesn't exist yet.
 	// Returns an existing or new access right for args.Share.

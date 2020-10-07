@@ -18,33 +18,30 @@ package manila
 
 import (
 	"context"
+	"errors"
 	"fmt"
-	"net"
-	"os"
-	"strings"
-	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/kubernetes-csi/csi-lib-utils/protosanitizer"
 	"google.golang.org/grpc"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/csiclient"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/grpcutils"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/shareadapters"
 	"k8s.io/cloud-provider-openstack/pkg/version"
 	"k8s.io/klog/v2"
 )
 
 type DriverOpts struct {
-	DriverName   string
-	NodeID       string
-	NodeAZ       string
-	WithTopology bool
-	ShareProto   string
+	DriverName         string
+	NodeID             string
+	NodeAZ             string
+	WithTopology       bool
+	EnabledAdapterOpts []options.AdapterOptions
+	MountInfoDir       string
 
 	ServerCSIEndpoint string
-	FwdCSIEndpoint    string
 
 	ManilaClientBuilder manilaclient.Builder
 	CSIClientBuilder    csiclient.Builder
@@ -52,280 +49,229 @@ type DriverOpts struct {
 	CompatOpts *options.CompatibilityOptions
 }
 
-type Driver struct {
-	nodeID       string
-	nodeAZ       string
-	withTopology bool
-	name         string
-	fqVersion    string // Fully qualified version in format {driverVersion}@{CPO version}
-	shareProto   string
+func (o *DriverOpts) validate() error {
+	notEmpty := func(value, name string) error {
+		if value == "" {
+			return fmt.Errorf("%s is missing", name)
+		}
+		return nil
+	}
 
-	serverEndpoint string
-	fwdEndpoint    string
+	valueNameMap := map[string]string{
+		o.DriverName:        "driver name",
+		o.NodeID:            "node ID",
+		o.ServerCSIEndpoint: "CSI driver endpoint",
+	}
 
-	compatOpts *options.CompatibilityOptions
+	for k, v := range valueNameMap {
+		if err := notEmpty(k, v); err != nil {
+			return err
+		}
+	}
 
-	ids *identityServer
-	cs  *controllerServer
-	ns  *nodeServer
+	if o.EnabledAdapterOpts == nil || len(o.EnabledAdapterOpts) == 0 {
+		return errors.New("no share adapters enabled")
+	}
 
-	vcaps  []*csi.VolumeCapability_AccessMode
-	cscaps []*csi.ControllerServiceCapability
-	nscaps []*csi.NodeServiceCapability
+	proto, addr, err := parseGRPCEndpoint(o.ServerCSIEndpoint)
+	if err != nil {
+		return fmt.Errorf("failed to parse the CSI driver endpoint: %v", err)
+	}
+	o.ServerCSIEndpoint = endpointAddress(proto, addr)
 
-	manilaClientBuilder manilaclient.Builder
-	csiClientBuilder    csiclient.Builder
-}
+	for i := range o.EnabledAdapterOpts {
+		if o.EnabledAdapterOpts[i].NodePluginEndpoint == "" {
+			continue
+		}
 
-type nonBlockingGRPCServer struct {
-	wg     sync.WaitGroup
-	server *grpc.Server
-}
+		proto, addr, err = parseGRPCEndpoint(o.EnabledAdapterOpts[i].NodePluginEndpoint)
+		if err != nil {
+			return fmt.Errorf("failed to parse node plugin endpoint %s for adapter %s: %v",
+				o.EnabledAdapterOpts[i].NodePluginEndpoint, o.EnabledAdapterOpts[i].Name, err)
+		}
 
-const (
-	specVersion   = "1.2.0"
-	driverVersion = "0.9.0"
-	topologyKey   = "topology.manila.csi.openstack.org/zone"
-)
-
-var (
-	serverGRPCEndpointCallCounter uint64
-)
-
-func argNotEmpty(val, name string) error {
-	if val == "" {
-		return fmt.Errorf("%s is missing", name)
+		o.EnabledAdapterOpts[i].NodePluginEndpoint = endpointAddress(proto, addr)
 	}
 
 	return nil
 }
 
-func NewDriver(o *DriverOpts) (*Driver, error) {
-	for k, v := range map[string]string{"node ID": o.NodeID, "driver name": o.DriverName, "driver endpoint": o.ServerCSIEndpoint, "FWD endpoint": o.FwdCSIEndpoint, "share protocol selector": o.ShareProto} {
-		if err := argNotEmpty(v, k); err != nil {
-			return nil, err
-		}
+type Driver struct {
+	*DriverOpts
+
+	fqVersion string // Fully qualified version in format {driverVersion}@{CPO version}
+
+	ids *identityServer
+	cs  *controllerServer
+	ns  *nodeServer
+
+	// All enabled share adapters
+	enabledAdapters map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter
+	// Subset of `enabledAdapters` with `NodePluginEndpoint` defined
+	enabledAdaptersWithNodePlugins map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter
+}
+
+const (
+	specVersion   = "1.2.0"
+	driverVersion = "1.0.0-preview"
+	topologyKey   = "topology.manila.csi.openstack.org/zone"
+)
+
+func NewDriver(opts *DriverOpts) (*Driver, error) {
+	if err := opts.validate(); err != nil {
+		return nil, err
 	}
 
 	d := &Driver{
-		fqVersion:           fmt.Sprintf("%s@%s", driverVersion, version.Version),
-		nodeID:              o.NodeID,
-		nodeAZ:              o.NodeAZ,
-		withTopology:        o.WithTopology,
-		name:                o.DriverName,
-		serverEndpoint:      o.ServerCSIEndpoint,
-		fwdEndpoint:         o.FwdCSIEndpoint,
-		shareProto:          strings.ToUpper(o.ShareProto),
-		compatOpts:          o.CompatOpts,
-		manilaClientBuilder: o.ManilaClientBuilder,
-		csiClientBuilder:    o.CSIClientBuilder,
+		DriverOpts: opts,
+		fqVersion:  fmt.Sprintf("%s@%s", driverVersion, version.Version),
+
+		enabledAdapters:                make(map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter),
+		enabledAdaptersWithNodePlugins: make(map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter),
 	}
 
-	klog.Info("Driver: ", d.name)
+	klog.Info("Driver: ", d.DriverName)
 	klog.Info("Driver version: ", d.fqVersion)
 	klog.Info("CSI spec version: ", specVersion)
 
-	getShareAdapter(d.shareProto) // The program will terminate with a non-zero exit code if the share protocol selector is wrong
-	klog.Infof("Operating on %s shares", d.shareProto)
-
-	if d.withTopology {
-		klog.Infof("Topology awareness enabled, node availability zone: %s", d.nodeAZ)
+	if d.WithTopology {
+		klog.Infof("Topology awareness enabled, node availability zone: %s", d.NodeAZ)
 	} else {
 		klog.Info("Topology awareness disabled")
 	}
 
-	serverProto, serverAddr, err := parseGRPCEndpoint(o.ServerCSIEndpoint)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse server endpoint address %s: %v", o.ServerCSIEndpoint, err)
-	}
+	// Initialize share adapters
 
-	fwdProto, fwdAddr, err := parseGRPCEndpoint(o.FwdCSIEndpoint)
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse proxy client address %s: %v", o.FwdCSIEndpoint, err)
-	}
+	for _, adapterOpts := range opts.EnabledAdapterOpts {
+		klog.Infof("Enabling adapter %#v", adapterOpts)
 
-	d.serverEndpoint = endpointAddress(serverProto, serverAddr)
-	d.fwdEndpoint = endpointAddress(fwdProto, fwdAddr)
+		var (
+			adapterType           = shareadapters.ShareAdapterNameTypeMap[adapterOpts.Name]
+			adapter               shareadapters.ShareAdapter
+			partnerNodePluginInfo *shareadapters.CSINodePluginInfo
+			err                   error
+		)
 
-	d.addControllerServiceCapabilities([]csi.ControllerServiceCapability_RPC_Type{
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
-		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
-	})
+		if _, ok := d.enabledAdapters[adapterType]; ok {
+			// Enabling the same share adapter twice may be a configuration error
+			// and is therefore not allowed.
+			return nil, fmt.Errorf("adapter %s already enabled", adapterOpts.Name)
+		}
 
-	d.addVolumeCapabilityAccessModes([]csi.VolumeCapability_AccessMode_Mode{
-		csi.VolumeCapability_AccessMode_MULTI_NODE_MULTI_WRITER,
-		csi.VolumeCapability_AccessMode_MULTI_NODE_SINGLE_WRITER,
-		csi.VolumeCapability_AccessMode_MULTI_NODE_READER_ONLY,
-		csi.VolumeCapability_AccessMode_SINGLE_NODE_WRITER,
-		csi.VolumeCapability_AccessMode_SINGLE_NODE_READER_ONLY,
-	})
+		if adapterOpts.NodePluginEndpoint != "" {
+			// Adapter has a Node Plugin endpoint defined. Try to retrieve its credentials.
+			partnerNodePluginInfo, err = buildCSINodePluginInfo(adapterOpts.NodePluginEndpoint, d.CSIClientBuilder)
+			if err != nil {
+				return nil, err
+			}
+		}
 
-	var supportsNodeStage bool
+		// Create a share adapter of the desired type
 
-	nodeCapsMap, err := d.initProxiedDriver()
-	if err != nil {
-		return nil, fmt.Errorf("failed to initialize proxied CSI driver: %v", err)
-	}
-	var nscaps []csi.NodeServiceCapability_RPC_Type
-	for c := range nodeCapsMap {
-		nscaps = append(nscaps, c)
+		switch adapterType {
+		case shareadapters.CephfsType:
+			adapter = &shareadapters.Cephfs{
+				NodePluginInfo: partnerNodePluginInfo,
+			}
 
-		if c == csi.NodeServiceCapability_RPC_STAGE_UNSTAGE_VOLUME {
-			supportsNodeStage = true
+		case shareadapters.NfsType:
+			adapter = &shareadapters.NFS{
+				NodePluginInfo: partnerNodePluginInfo,
+			}
+
+		default:
+			return nil, fmt.Errorf("unknown adapter %s", adapterOpts.Name)
+		}
+
+		// Store the adapter
+
+		d.enabledAdapters[adapterType] = adapter
+		if adapterOpts.NodePluginEndpoint != "" {
+			d.enabledAdaptersWithNodePlugins[adapterType] = adapter
+			klog.Infof("Associating %s adapter with %#v", adapterOpts.Name, adapter.GetCSINodePluginInfo())
 		}
 	}
 
-	d.addNodeServiceCapabilities(nscaps)
+	// Initialize Identity server
+	d.ids = newIdentityServer(d)
 
-	d.ids = &identityServer{d: d}
-	d.cs = &controllerServer{d: d}
-	d.ns = &nodeServer{d: d, supportsNodeStage: supportsNodeStage, nodeStageCache: make(map[volumeID]stageCacheEntry)}
+	// Initialize Node server
+	d.ns = newNodeServer(d)
+
+	// Initialize Controller server
+	d.cs = newControllerServer(d)
 
 	return d, nil
 }
 
-func (d *Driver) Run() {
-	s := nonBlockingGRPCServer{}
-	s.start(d.serverEndpoint, d.ids, d.cs, d.ns)
-	s.wait()
-}
-
-func (d *Driver) addControllerServiceCapabilities(cs []csi.ControllerServiceCapability_RPC_Type) {
-	var caps []*csi.ControllerServiceCapability
-
-	for _, c := range cs {
-		klog.Infof("Enabling controller service capability: %v", c.String())
-		csc := &csi.ControllerServiceCapability{
-			Type: &csi.ControllerServiceCapability_Rpc{
-				Rpc: &csi.ControllerServiceCapability_RPC{
-					Type: c,
-				},
-			},
-		}
-
-		caps = append(caps, csc)
-	}
-
-	d.cscaps = caps
-}
-
-func (d *Driver) addVolumeCapabilityAccessModes(vs []csi.VolumeCapability_AccessMode_Mode) {
-	var caps []*csi.VolumeCapability_AccessMode
-
-	for _, c := range vs {
-		klog.Infof("Enabling volume access mode: %v", c.String())
-		caps = append(caps, &csi.VolumeCapability_AccessMode{Mode: c})
-	}
-
-	d.vcaps = caps
-}
-
-func (d *Driver) addNodeServiceCapabilities(ns []csi.NodeServiceCapability_RPC_Type) {
-	var caps []*csi.NodeServiceCapability
-
-	for _, c := range ns {
-		klog.Infof("Enabling node service capability: %v", c.String())
-		nsc := &csi.NodeServiceCapability{
-			Type: &csi.NodeServiceCapability_Rpc{
-				Rpc: &csi.NodeServiceCapability_RPC{
-					Type: c,
-				},
-			},
-		}
-
-		caps = append(caps, nsc)
-	}
-
-	d.nscaps = caps
-}
-
-func (d *Driver) initProxiedDriver() (csiNodeCapabilitySet, error) {
-	conn, err := d.csiClientBuilder.NewConnection(d.fwdEndpoint)
-	if err != nil {
-		return nil, fmt.Errorf("connecting to %s endpoint failed: %v", d.fwdEndpoint, err)
-	}
-
-	identityClient := d.csiClientBuilder.NewIdentityServiceClient(conn)
-
-	if err = identityClient.ProbeForever(conn, time.Second*5); err != nil {
-		return nil, fmt.Errorf("probe failed: %v", err)
-	}
-
+func buildCSINodePluginInfo(endpoint string, csiClientBuilder csiclient.Builder) (*shareadapters.CSINodePluginInfo, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*15)
 	defer cancel()
 
-	pluginInfo, err := identityClient.GetPluginInfo(ctx)
+	conn, err := csiClientBuilder.NewConnectionWithContext(ctx, endpoint)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get plugin info of the proxied driver: %v", err)
+		return nil, fmt.Errorf("failed to connect to %s: %v", endpoint, err)
+	}
+	defer conn.Close()
+
+	getPluginInfoResp, err := csiClientBuilder.NewIdentityServiceClient(conn).GetPluginInfo(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("GetPluginInfo failed for %s: %v", endpoint, err)
 	}
 
-	klog.Infof("proxying CSI driver %s version %s", pluginInfo.GetName(), pluginInfo.GetVendorVersion())
-
-	nodeCaps, err := csiNodeGetCapabilities(ctx, d.csiClientBuilder.NewNodeServiceClient(conn))
+	getNodeCapabilitiesResp, err := csiClientBuilder.NewNodeServiceClient(conn).GetCapabilities(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get node capabilities: %v", err)
+		return nil, fmt.Errorf("GetNodeCapabilities failed for %s: %v", endpoint, err)
 	}
 
-	return nodeCaps, nil
-}
-
-func (s *nonBlockingGRPCServer) start(endpoint string, ids *identityServer, cs *controllerServer, ns *nodeServer) {
-	s.wg.Add(1)
-	go s.serve(endpoint, ids, cs, ns)
-}
-
-func (s *nonBlockingGRPCServer) wait() {
-	s.wg.Wait()
-}
-
-func (s *nonBlockingGRPCServer) stop() {
-	s.server.GracefulStop()
-}
-
-func (s *nonBlockingGRPCServer) forceStop() {
-	s.server.Stop()
-}
-
-func (s *nonBlockingGRPCServer) serve(endpoint string, ids *identityServer, cs *controllerServer, ns *nodeServer) {
-	proto, addr, err := parseGRPCEndpoint(endpoint)
-	if err != nil {
-		klog.Fatalf("couldn't parse GRPC server endpoint address %s: %v", endpoint, err)
+	nodeCaps := make(map[csi.NodeServiceCapability_RPC_Type]struct{}, len(getNodeCapabilitiesResp.GetCapabilities()))
+	for _, capability := range getNodeCapabilitiesResp.GetCapabilities() {
+		nodeCaps[capability.GetRpc().GetType()] = struct{}{}
 	}
 
-	if proto == "unix" {
-		if err = os.Remove(addr); err != nil && !os.IsNotExist(err) {
-			klog.Fatalf("failed to remove an existing socket file %s: %v", addr, err)
+	return &shareadapters.CSINodePluginInfo{
+		Endpoint:     endpoint,
+		Name:         getPluginInfoResp.GetName(),
+		Version:      getPluginInfoResp.GetVendorVersion(),
+		Capabilities: nodeCaps,
+	}, nil
+}
+
+func (d *Driver) Run() error {
+	s := grpcutils.NewServer(d.ServerCSIEndpoint, grpc.UnaryInterceptor(grpcutils.ServerLogRPC))
+
+	idsCapTypesToStringSlice := func() []string {
+		ss := make([]string, len(d.ids.caps))
+		for i := range d.ids.caps {
+			ss[i] = d.ids.caps[i].String()
 		}
+		return ss
 	}
 
-	listener, err := net.Listen(proto, addr)
-	if err != nil {
-		klog.Fatalf("listen failed for GRPC server: %v", err)
-	}
+	klog.Info("Registering Indentity server with ", idsCapTypesToStringSlice())
+	csi.RegisterIdentityServer(s.Server, d.ids)
 
-	server := grpc.NewServer(grpc.UnaryInterceptor(func(ctx context.Context, req interface{}, info *grpc.UnaryServerInfo, handler grpc.UnaryHandler) (interface{}, error) {
-		callID := atomic.AddUint64(&serverGRPCEndpointCallCounter, 1)
-
-		klog.V(3).Infof("[ID:%d] GRPC call: %s", callID, info.FullMethod)
-		klog.V(5).Infof("[ID:%d] GRPC request: %s", callID, protosanitizer.StripSecrets(req))
-		resp, err := handler(ctx, req)
-		if err != nil {
-			klog.Errorf("[ID:%d] GRPC error: %v", callID, err)
-		} else {
-			klog.V(5).Infof("[ID:%d] GRPC response: %s", callID, protosanitizer.StripSecrets(resp))
+	nsCapTypesToStringSlice := func() []string {
+		ss := make([]string, len(nodeServiceCapsTypes))
+		for i := range nodeServiceCapsTypes {
+			ss[i] = nodeServiceCapsTypes[i].String()
 		}
-		return resp, err
-	}))
-
-	s.server = server
-
-	csi.RegisterIdentityServer(server, ids)
-	csi.RegisterControllerServer(server, cs)
-	csi.RegisterNodeServer(server, ns)
-
-	klog.Infof("listening for connections on %#v", listener.Addr())
-
-	if err := server.Serve(listener); err != nil {
-		klog.Fatalf("GRPC server failure: %v", err)
+		return ss
 	}
+
+	klog.Info("Registering Node server with ", nsCapTypesToStringSlice())
+	csi.RegisterNodeServer(s.Server, d.ns)
+
+	csCapTypesToStringSlice := func() []string {
+		ss := make([]string, len(controllerServiceCapsTypes))
+		for i := range controllerServiceCapsTypes {
+			ss[i] = controllerServiceCapsTypes[i].String()
+		}
+		return ss
+	}
+
+	klog.Info("Registering Controller server with ", csCapTypesToStringSlice())
+	csi.RegisterControllerServer(s.Server, d.cs)
+
+	return s.Serve()
 }

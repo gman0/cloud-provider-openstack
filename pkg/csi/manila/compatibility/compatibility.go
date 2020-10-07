@@ -20,10 +20,11 @@ import (
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/csiclient"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/shareadapters"
 )
 
 type Layer interface {
-	SupplementCapability(compatOpts *options.CompatibilityOptions, dstShare *shares.Share, dstShareAccessRight *shares.AccessRight, req *csi.CreateVolumeRequest, fwdEndpoint string, manilaClient manilaclient.Interface, csiClientBuilder csiclient.Builder) error
+	SupplementCapability(compatOpts *options.CompatibilityOptions, dstShare *shares.Share, dstShareAccessRight *shares.AccessRight, req *csi.CreateVolumeRequest, adapter shareadapters.ShareAdapter, manilaClient manilaclient.Interface, csiClientBuilder csiclient.Builder) error
 }
 
 // Certain share protocols may not support certain Manila capabilities

@@ -30,14 +30,16 @@ The CSI Manila driver is able to create and mount OpenStack Manila shares. Snaps
 
 Option | Default value | Description
 -------|---------------|------------
-`--endpoint` | `unix:///tmp/csi.sock` | CSI Manila's CSI endpoint
-`--drivername` | `manila.csi.openstack.org` | Name of this driver
-`--nodeid` | _none_ | ID of this node
-`--nodeaz` | _none_ | Availability zone of this node
-`--runtime-config-file` | _none_ | Path to the [runtime configuration file](#runtime-configuration-file)
-`--with-topology` | _none_ | CSI Manila is topology-aware. See [Topology-aware dynamic provisioning](#topology-aware-dynamic-provisioning) for more info
-`--share-protocol-selector` | _none_ | Specifies which Manila share protocol to use for this instance of the driver. See [supported protocols](#share-protocol-support-matrix) for valid values.
-`--fwdendpoint` | _none_ | [CSI Node Plugin](https://github.com/container-storage-interface/spec/blob/master/spec.md#rpc-interface) endpoint to which all Node Service RPCs are forwarded. Must be able to handle the file-system specified in `share-protocol-selector`. Check out the [Deployment](#deployment) section to see why this is necessary.
+`--endpoint` | `unix:///tmp/csi.sock` | Required. CSI Manila's CSI endpoint.
+`--drivername` | `manila.csi.openstack.org` | Required. Name of this driver.
+`--nodeid` | _none_ | Required. ID of this node.
+`--nodeaz` | _none_ | Required if `--with-topology` is set. Availability zone of this node.
+`--mount-info-dir` | _none_ | Required to perform volume mounts. Absolute path to a directory for storing internal mount info. Storage used must be resillient enough to survive redeployment of the driver on the node, as losing the data will result in volume unmount failures. For Kubernetes, `hostPath` volume kind is recommended.
+`--runtime-config-file` | _none_ | Optional. Path to the [runtime configuration file](#runtime-configuration-file).
+`--with-topology` | _none_ | Optional. CSI Manila is topology-aware. See [Topology-aware dynamic provisioning](#topology-aware-dynamic-provisioning) for more info.
+`--share-protocol-selector` | _none_ | DEPRECATED: please user `--enable-adapter` instead. Specifies which Manila share protocol to use for this instance of the driver. See [supported protocols](#share-protocol-support-matrix) for valid values.
+`--fwdendpoint` | _none_ | DEPRECATED: please user `--enable-adapter` instead. [CSI Node Plugin](https://github.com/container-storage-interface/spec/blob/master/spec.md#rpc-interface) endpoint to which all Node Service RPCs are forwarded. Must be able to handle the file-system specified in `share-protocol-selector`. Check out the [Deployment](#deployment) section to see why this is necessary.
+`--enable-adapter` | _none_ | Enables a share adapter. Repeat for each share adapter you wish to use. Accepts a comma separated list of key-value items. Valid keys are `name`: required, specifies the share adapter name; `node-plugin-endpoint`: optional, specifies the associated partner Node Plugin for this share adapter. At least one share adapter must be enabled.
 
 ### Controller Service volume parameters
 

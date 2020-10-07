@@ -1,84 +1,114 @@
 nameOverride: ""
 fullNameOverride: ""
 
-# Base name of the CSI Manila driver
-driverName: manila.csi.openstack.org
+csi:
 
-# Enabled Manila share protocols
-shareProtocols:
-  - protocolSelector: NFS
-    fwdNodePluginEndpoint:
-      dir: /var/lib/kubelet/plugins/csi-nfsplugin
-      sockFile: csi.sock
-#  - protocolSelector: CEPHFS
-#    fwdNodePluginEndpoint:
-#      dir: /var/lib/kubelet/plugins/cephfs.csi.ceph.com
-#      sockFile: csi.sock
+  # manila-csi-plugin definition
+  plugin:
 
-# CSI Manila spec
-csimanila:
-  # Set topologyAwarenessEnabled to true to enable topology awareness
-  topologyAwarenessEnabled: false
-  # Runtime configuration
-  runtimeConfig:
-    enabled: false
-    jsonData: |-
-      {
-        "nfs": {
-          "matchExportLocationAddress": "172.168.122.0/24"
-        }
-      }
-  # Availability zone for each node. topologyAwarenessEnabled must be set to true for this option to have any effect.
-  # If your Kubernetes cluster runs atop of Nova and want to use Nova AZs as AZs for the nodes of the cluster, uncomment the line below:
-  # nodeAZ: "$(curl http://169.254.169.254/openstack/latest/meta_data.json | jq -r .availability_zone)"
-  # Image spec
-  image:
-    repository: k8scloudprovider/manila-csi-plugin
-    pullPolicy: IfNotPresent
-    tag:  # defaults to .Chart.AppVersion
+    # Image spec
+    image:
+      repository: manila-csi-plugin-amd64
+      pullPolicy: IfNotPresent
+      tag: # defaults to .Chart.AppVersion
 
-# DeamonSet deployment
-nodeplugin:
-  # Component name
-  name: nodeplugin
-  # CSI Manila container compute resources constraints
-  nodeplugin:
-    resources: {}
-  # csi-node-driver-registrar
+    # CSI Manila will be registered in the cluster under this name
+    driverName: manila.csi.openstack.org
+
+    # Set `topologyAwarenessEnabled` to true to enable topology awareness
+    topologyAwarenessEnabled: false
+    # If `topologyAwarenessEnabled` is set to true, `nodeAZ` will be used
+    # as topology annotation for each node: topology.manila.csi.openstack.org=<nodeAZ>
+    nodeAZ: "$(curl http://169.254.169.254/openstack/latest/meta_data.json | jq -r .availability_zone)"
+
+    # Runtime configuration
+    # If enabled, a ConfigMap named `manila-csi-runtimeconf-cm`
+    # will be create and filled with `jsonData`.
+    runtimeConfig:
+      enabled: false
+      # jsonData: |-
+      #   {
+      #     "nfs": {
+      #       "matchExportLocationAddress": "172.168.122.0/24"
+      #     }
+      #   }
+
+    # Definition for the controllerplugin component
+    controllerplugin:
+
+      # Enabled share adapters
+      adapters:
+        - name: nfs
+        - name: cephfs
+
+      # Container resource constraints
+      resources: {}
+
+      # Scheduler settings
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+
+    # Definition for the nodeplugin component
+    nodeplugin:
+
+      # Enabled share adapters
+      adapters:
+        - name: nfs
+          # nodePluginEndpoint:
+          #   dir: /var/lib/kubelet/plugins/csi-nfsplugin
+          #   sockFile: csi.sock
+        - name: cephfs
+          # nodePluginEndpoint:
+          #   dir: /var/lib/kubelet/plugins/cephfs.csi.ceph.com
+          #   sockFile: csi.sock
+
+      # Container resource constraints
+      resources: {}
+
+      # Scheduler settings
+      nodeSelector: {}
+      tolerations: []
+      affinity: {}
+
+    # Use fullnameOverride to fully override the name of this component
+    # fullnameOverride: some-other-name
+
+  # CSI node-driver-registrar sidecar container
+  # See https://github.com/kubernetes-csi/node-driver-registrar for more info.
   registrar:
+
+    # Image spec
     image:
       repository: quay.io/k8scsi/csi-node-driver-registrar
       tag: v1.1.0
       pullPolicy: IfNotPresent
-    resources: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  # Use fullnameOverride to fully override the name of this component
-  # fullnameOverride: some-other-name
 
-# StatefulSet deployment
-controllerplugin:
-  name: controllerplugin
-  # CSI Manila container compute resources constraints
-  nodeplugin:
+    # Container resource constraints
     resources: {}
-  # CSI external-provisioner container spec
+
+  # CSI external-provisioner sidecar container
+  # See https://github.com/kubernetes-csi/external-provisioner for more info.
   provisioner:
+
+    # Image spec
     image:
       repository: quay.io/k8scsi/csi-provisioner
       tag: v2.0.2
       pullPolicy: IfNotPresent
+
+    # Container resource constraints
     resources: {}
-  # CSI external-snapshotter container spec
+
+  # CSI external-snapshotter sidecar container
+  # See https://github.com/kubernetes-csi/external-snapshotter for more info.
   snapshotter:
+
+    # Image spec
     image:
       repository: quay.io/k8scsi/csi-snapshotter
       tag: v2.1.1
       pullPolicy: IfNotPresent
+
+    # Container resource constraints
     resources: {}
-  nodeSelector: {}
-  tolerations: []
-  affinity: {}
-  # Use fullnameOverride to fully override the name of this component
-  # fullnameOverride: some-other-name

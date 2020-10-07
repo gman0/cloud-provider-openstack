@@ -58,8 +58,14 @@ spec:
             --nodeid=$(NODE_ID)
             --endpoint=$(CSI_ENDPOINT)
             --drivername=$(DRIVER_NAME)
-            --share-protocol-selector=$(MANILA_SHARE_PROTO)
-            --fwdendpoint=$(FWD_CSI_ENDPOINT)'
+            --mount-info-dir=$(MOUNT_INFO_DIR)'
+
+            # Share adapters
+            # Enable share adapters by adding --enable-adapter=name=<ADAPTER NAME>,node-plugin-endpoint=<PARTNER NODE PLUGIN ENDPOINT> repeatedly for each adapter.
+            # Example:
+            # --enable-adapter=name=nfs,node-plugin-endpoint=/var/lib/kubelet/plugins/csi-nfsplugin/csi.sock
+            # --enable-adapter=name=cephfs,node-plugin-endpoint=/var/lib/kubelet/plugins/cephfs.csi.ceph.com/csi.sock
+            #
             # To enable topology awareness and retrieve compute node AZs from the OpenStack Metadata Service, add the following flags:
             # --with-topology
             # --nodeaz=$(curl http://169.254.169.254/openstack/latest/meta_data.json | jq -r .availability_zone)
@@ -74,16 +80,20 @@ spec:
                   fieldPath: spec.nodeName
             - name: CSI_ENDPOINT
               value: "unix:///var/lib/kubelet/plugins/manila.csi.openstack.org/csi.sock"
-            - name: FWD_CSI_ENDPOINT
-              value: "unix:///var/lib/kubelet/plugins/FWD-NODEPLUGIN/csi.sock"
-            - name: MANILA_SHARE_PROTO
-              value: "SHARE-PROTOCOL"
+            - name: MOUNT_INFO_DIR
+              value: "/csi/mountinfo"
           imagePullPolicy: IfNotPresent
           volumeMounts:
             - name: plugin-dir
               mountPath: /var/lib/kubelet/plugins/manila.csi.openstack.org
-            - name: fwd-plugin-dir
-              mountPath: /var/lib/kubelet/plugins/FWD-NODEPLUGIN
+            - name: mountinfo-dir
+              mountPath: /csi/mountinfo
+            # Uncomment for NFS share adapter:
+            # - name: nfs-plugin-dir
+            #   mountPath: /var/lib/kubelet/plugins/csi-nfsplugin
+            # Uncomment for CephFS share adapter:
+            # - name: nfs-plugin-dir
+            #   mountPath: /var/lib/kubelet/plugins/cephfs.csi.openstack.org
       volumes:
         - name: registration-dir
           hostPath:
@@ -93,8 +103,17 @@ spec:
           hostPath:
             path: /var/lib/kubelet/plugins/manila.csi.openstack.org
             type: DirectoryOrCreate
-        - name: fwd-plugin-dir
+        - name: mountinfo-dir
           hostPath:
-            path: /var/lib/kubelet/plugins/FWD-NODEPLUGIN
+            path: /var/lib/kubelet/plugins/manila.csi.openstack.org/node/mountinfo
             type: DirectoryOrCreate
-
+        # Uncomment for NFS share adapter:
+        # - name: nfs-plugin-dir
+        #   hostPath:
+        #     path: /var/lib/kubelet/plugins/csi-nfsplugin
+        #     type: DirectoryOrCreate
+        # Uncomment for CephFS share adapter:
+        # - name: nfs-plugin-dir
+        #   hostPath:
+        #     path: /var/lib/kubelet/plugins/cephfs.csi.openstack.org
+        #     type: DirectoryOrCreate

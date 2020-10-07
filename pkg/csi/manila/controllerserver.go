@@ -33,14 +33,46 @@ import (
 	"k8s.io/klog/v2"
 )
 
+// Implements the CSI Controller service
 type controllerServer struct {
-	d *Driver
+	d    *Driver
+	caps []*csi.ControllerServiceCapability
+
+	pendingVolumes   sync.Map
+	pendingSnapshots sync.Map
 }
 
 var (
-	pendingVolumes   = sync.Map{}
-	pendingSnapshots = sync.Map{}
+	// Supported Controller service capabilities - RPC types
+	controllerServiceCapsTypes = []csi.ControllerServiceCapability_RPC_Type{
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
+		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
+	}
+
+	// Supported Controller service capabilities
+	controllerServiceCaps []*csi.ControllerServiceCapability
 )
+
+func init() {
+	// Initialize `controllerServiceCaps`
+
+	controllerServiceCaps = make([]*csi.ControllerServiceCapability, len(controllerServiceCapsTypes))
+	for i := range controllerServiceCapsTypes {
+		controllerServiceCaps[i] = &csi.ControllerServiceCapability{
+			Type: &csi.ControllerServiceCapability_Rpc{
+				Rpc: &csi.ControllerServiceCapability_RPC{
+					Type: controllerServiceCapsTypes[i],
+				},
+			},
+		}
+	}
+}
+
+func newControllerServer(d *Driver) *controllerServer {
+	return &controllerServer{
+		d: d,
+	}
+}
 
 func getVolumeCreator(source *csi.VolumeContentSource, shareOpts *options.ControllerVolumeContext, compatOpts *options.CompatibilityOptions, shareTypeCaps capabilities.ManilaCapabilities) (volumeCreator, error) {
 	if source == nil {
@@ -75,7 +107,24 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		params = make(map[string]string)
 	}
 
-	params["protocol"] = cs.d.shareProto
+	if _, ok := params["protocol"]; !ok {
+		// Share protocol is not explicitly set in volume parameters.
+		// Choose a default one based on the enabled share adapters.
+		// This is to retain backwards compatibility with v0 version
+		// of the driver, where share proto is always set.
+
+		if len(cs.d.enabledAdapters) == 1 {
+			// A default share proto may be reliably chosen only
+			// if there is a single share adapter enabled.
+
+			for _, v := range cs.d.enabledAdapters {
+				params["protocol"] = v.ShareProtocol()
+			}
+		}
+
+		// If none is chosen, the validator in options.NewControllerVolumeContext
+		// will report an error.
+	}
 
 	shareOpts, err := options.NewControllerVolumeContext(params)
 	if err != nil {
@@ -87,13 +136,18 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid OpenStack secrets: %v", err)
 	}
 
+	adapter, err := getShareAdapter(shareOpts.Protocol, cs.d.enabledAdapters)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "failed to choose a share adapter: %v", err)
+	}
+
 	// Check for pending CreateVolume for this volume name
-	if _, isPending := pendingVolumes.LoadOrStore(req.GetName(), true); isPending {
+	if _, isPending := cs.pendingVolumes.LoadOrStore(req.GetName(), true); isPending {
 		return nil, status.Errorf(codes.Aborted, "a volume named %s is already being created", req.GetName())
 	}
-	defer pendingVolumes.Delete(req.GetName())
+	defer cs.pendingVolumes.Delete(req.GetName())
 
-	manilaClient, err := cs.d.manilaClientBuilder.New(osOpts)
+	manilaClient, err := cs.d.ManilaClientBuilder.New(osOpts)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
@@ -113,7 +167,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// Retrieve an existing share or create a new one
 
-	volCreator, err := getVolumeCreator(req.GetVolumeContentSource(), shareOpts, cs.d.compatOpts, shareTypeCaps)
+	volCreator, err := getVolumeCreator(req.GetVolumeContentSource(), shareOpts, cs.d.CompatOpts, shareTypeCaps)
 	if err != nil {
 		return nil, err
 	}
@@ -123,17 +177,15 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, err
 	}
 
-	if err = verifyVolumeCompatibility(sizeInGiB, req, share, shareOpts, cs.d.compatOpts, shareTypeCaps); err != nil {
+	if err = verifyVolumeCompatibility(sizeInGiB, req, share, shareOpts, cs.d.CompatOpts, shareTypeCaps); err != nil {
 		return nil, status.Errorf(codes.AlreadyExists, "a share named %s already exists, but is incompatible with the request: %v", req.GetName(), err)
 	}
 
 	// Grant access to the share
 
-	ad := getShareAdapter(shareOpts.Protocol)
-
 	klog.V(4).Infof("creating an access rule for share %s", share.ID)
 
-	accessRight, err := ad.GetOrGrantAccess(&shareadapters.GrantAccessArgs{Share: share, ManilaClient: manilaClient, Options: shareOpts})
+	accessRight, err := adapter.GetOrGrantAccess(&shareadapters.GrantAccessArgs{Share: share, ManilaClient: manilaClient, Options: shareOpts})
 	if err != nil {
 		if err == wait.ErrWaitTimeout {
 			return nil, status.Errorf(codes.DeadlineExceeded, "deadline exceeded while waiting for access rights %s for share %s to become available", accessRight.ID, share.ID)
@@ -143,8 +195,8 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	// Check if compatibility layer is needed and can be used
-	if compatLayer := tryCompatForVolumeSource(cs.d.compatOpts, shareOpts, req.GetVolumeContentSource(), shareTypeCaps); compatLayer != nil {
-		if err = compatLayer.SupplementCapability(cs.d.compatOpts, share, accessRight, req, cs.d.fwdEndpoint, manilaClient, cs.d.csiClientBuilder); err != nil {
+	if compatLayer := tryCompatForVolumeSource(cs.d.CompatOpts, shareOpts, req.GetVolumeContentSource(), shareTypeCaps); compatLayer != nil {
+		if err = compatLayer.SupplementCapability(cs.d.CompatOpts, share, accessRight, req, adapter, manilaClient, cs.d.CSIClientBuilder); err != nil {
 			// An error occurred, the user must clean the share manually
 			// TODO needs proper monitoring
 			return nil, err
@@ -152,7 +204,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 	}
 
 	var accessibleTopology []*csi.Topology
-	if cs.d.withTopology {
+	if cs.d.WithTopology {
 		// All requisite/preferred topologies are considered valid. Nodes from those zones are required to be able to reach the storage.
 		// The operator is responsible for making sure that provided topology keys are valid and present on the nodes of the cluster.
 		accessibleTopology = req.GetAccessibilityRequirements().GetPreferred()
@@ -183,7 +235,7 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid OpenStack secrets: %v", err)
 	}
 
-	manilaClient, err := cs.d.manilaClientBuilder.New(osOpts)
+	manilaClient, err := cs.d.ManilaClientBuilder.New(osOpts)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
@@ -196,12 +248,6 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 }
 
 func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	if cs.d.shareProto == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Creating CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.InvalidArgument, "the driver doesn't support snapshotting CephFS shares yet")
-	}
-
 	if err := validateCreateSnapshotRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -214,12 +260,12 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	}
 
 	// Check for pending CreateSnapshots for this snapshot name
-	if _, isPending := pendingSnapshots.LoadOrStore(req.GetName(), true); isPending {
+	if _, isPending := cs.pendingSnapshots.LoadOrStore(req.GetName(), true); isPending {
 		return nil, status.Errorf(codes.Aborted, "a snapshot named %s is already being created", req.GetName())
 	}
-	defer pendingSnapshots.Delete(req.GetName())
+	defer cs.pendingSnapshots.Delete(req.GetName())
 
-	manilaClient, err := cs.d.manilaClientBuilder.New(osOpts)
+	manilaClient, err := cs.d.ManilaClientBuilder.New(osOpts)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
@@ -235,9 +281,10 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		return nil, status.Errorf(codes.Internal, "failed to retrieve source share %s when creating a snapshot (%s): %v", req.GetSourceVolumeId(), req.GetName(), err)
 	}
 
-	if strings.ToUpper(sourceShare.ShareProto) != cs.d.shareProto {
-		return nil, status.Errorf(codes.InvalidArgument, "share protocol mismatch: requested a snapshot of %s share %s, but share protocol selector is set to %s",
-			sourceShare.ShareProto, req.GetSourceVolumeId(), cs.d.shareProto)
+	if strings.ToUpper(sourceShare.ShareProto) == "CEPHFS" {
+		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
+		// TODO: Creating CephFS snapshots is forbidden until CephFS restoration is in place.
+		return nil, status.Errorf(codes.Unimplemented, "the driver doesn't support snapshotting CephFS shares yet")
 	}
 
 	// Retrieve an existing snapshot or create a new one
@@ -303,12 +350,6 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 }
 
 func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	if cs.d.shareProto == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Deleting CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.InvalidArgument, "the driver doesn't support CephFS snapshots yet")
-	}
-
 	if err := validateDeleteSnapshotRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -318,7 +359,7 @@ func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteS
 		return nil, status.Errorf(codes.InvalidArgument, "invalid OpenStack secrets: %v", err)
 	}
 
-	manilaClient, err := cs.d.manilaClientBuilder.New(osOpts)
+	manilaClient, err := cs.d.ManilaClientBuilder.New(osOpts)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
@@ -332,7 +373,7 @@ func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteS
 
 func (cs *controllerServer) ControllerGetCapabilities(ctx context.Context, req *csi.ControllerGetCapabilitiesRequest) (*csi.ControllerGetCapabilitiesResponse, error) {
 	return &csi.ControllerGetCapabilitiesResponse{
-		Capabilities: cs.d.cscaps,
+		Capabilities: controllerServiceCaps,
 	}, nil
 }
 
@@ -360,7 +401,7 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 		}
 	}
 
-	manilaClient, err := cs.d.manilaClientBuilder.New(osOpts)
+	manilaClient, err := cs.d.ManilaClientBuilder.New(osOpts)
 	if err != nil {
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
@@ -380,10 +421,6 @@ func (cs *controllerServer) ValidateVolumeCapabilities(ctx context.Context, req 
 		}
 
 		return nil, status.Errorf(codes.FailedPrecondition, "share %s is in an unexpected state: wanted %s, got %s", share.ID, shareAvailable, share.Status)
-	}
-
-	if !compareProtocol(share.ShareProto, cs.d.shareProto) {
-		return nil, status.Errorf(codes.InvalidArgument, "share protocol mismatch: wanted %s, got %s", cs.d.shareProto, share.ShareProto)
 	}
 
 	return &csi.ValidateVolumeCapabilitiesResponse{

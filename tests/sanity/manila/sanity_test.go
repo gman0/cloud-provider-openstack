@@ -22,9 +22,10 @@ import (
 	"path"
 	"testing"
 
-	"github.com/kubernetes-csi/csi-test/pkg/sanity"
+	"github.com/kubernetes-csi/csi-test/v3/pkg/sanity"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/shareadapters"
 )
 
 func TestDriver(t *testing.T) {
@@ -33,20 +34,36 @@ func TestDriver(t *testing.T) {
 		t.Fatalf("failed create base path in %s: %v", basePath, err)
 	}
 
-	defer os.RemoveAll(basePath)
+	defer func() {
+		os.RemoveAll(basePath)
+		os.Remove(basePath)
+	}()
 
 	endpoint := path.Join(basePath, "csi.sock")
-	fwdEndpoint := "unix:///fake-fwd-endpoint"
+
+	validAdapters := make([]string, 0, len(shareadapters.ShareAdapterNameTypeMap))
+	for name := range shareadapters.ShareAdapterNameTypeMap {
+		validAdapters = append(validAdapters, name)
+	}
+
+	adapterOpts, err := options.NewAdapterOptions(map[string]string{
+		"name":                 "nfs",
+		"node-plugin-endpoint": "unix:///fake.sock",
+	}, validAdapters)
+
+	if err != nil {
+		t.Fatalf("failed to create adapter options: %v", err)
+	}
 
 	d, err := manila.NewDriver(
 		&manila.DriverOpts{
-			DriverName:          "fake.manila.csi.openstack.org",
-			NodeID:              "node",
+			DriverName:          "manila.csi.openstack.org",
+			NodeID:              "fake-node",
 			WithTopology:        true,
+			EnabledAdapterOpts:  []options.AdapterOptions{*adapterOpts},
+			MountInfoDir:        basePath,
 			NodeAZ:              "fake-az",
-			ShareProto:          "NFS",
 			ServerCSIEndpoint:   endpoint,
-			FwdCSIEndpoint:      fwdEndpoint,
 			ManilaClientBuilder: &fakeManilaClientBuilder{},
 			CSIClientBuilder:    &fakeCSIClientBuilder{},
 			CompatOpts:          &options.CompatibilityOptions{},
@@ -58,10 +75,9 @@ func TestDriver(t *testing.T) {
 
 	go d.Run()
 
-	sanity.Test(t, &sanity.Config{
-		Address:     endpoint,
-		SecretsFile: "fake-secrets.yaml",
-		TargetPath:  path.Join(basePath, "target"),
-		StagingPath: path.Join(basePath, "staging"),
-	})
+	cfg := sanity.NewTestConfig()
+	cfg.SecretsFile = "fake-secrets.yaml"
+	cfg.Address = endpoint
+
+	sanity.Test(t, cfg)
 }

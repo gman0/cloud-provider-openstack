@@ -17,21 +17,19 @@ limitations under the License.
 package manila
 
 import (
+	"fmt"
 	"strings"
 
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/shareadapters"
-	"k8s.io/klog/v2"
 )
 
-func getShareAdapter(proto string) shareadapters.ShareAdapter {
-	switch strings.ToUpper(proto) {
-	case "CEPHFS":
-		return &shareadapters.Cephfs{}
-	case "NFS":
-		return &shareadapters.NFS{}
-	default:
-		klog.Fatalf("unknown share adapter %s", proto)
+func getShareAdapter(proto string, adapters map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter) (shareadapters.ShareAdapter, error) {
+	// Try to find a suitable adapter by share protocol
+	if t, ok := shareadapters.ShareAdapterNameTypeMap[strings.ToLower(proto)]; ok {
+		if adapter, ok := adapters[t]; ok {
+			return adapter, nil
+		}
 	}
 
-	return nil
+	return nil, fmt.Errorf("adapter for share protocol %s either not available or not enabled", proto)
 }
