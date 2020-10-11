@@ -41,6 +41,11 @@ csi:
         - name: nfs
         - name: cephfs
 
+      # Active-passive high availability of CSI Manila's control plane is implemented using leader election.
+      # The deployment uses Pod anti-affinity to spread the replicas to separate nodes of the cluster.
+      # `replicas` specifies the number of replicas of control plane to deploy.
+      replicas: 3
+
       # Container resource constraints
       resources: {}
 

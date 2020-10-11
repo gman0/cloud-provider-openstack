@@ -1,4 +1,4 @@
-kind: StatefulSet
+kind: Deployment
 apiVersion: apps/v1
 metadata:
   name: {{ include "openstack-manila-csi.controllerplugin.fullname" . }}
@@ -9,8 +9,7 @@ metadata:
     release: {{ .Release.Name }}
     heritage: {{ .Release.Service }}
 spec:
-  serviceName: {{ include "openstack-manila-csi.controllerplugin.fullname" . }}
-  replicas: 1
+  replicas: {{ .Values.csi.plugin.controllerplugin.replicas }}
   selector:
     matchLabels:
       app: {{ include "openstack-manila-csi.name" . }}
@@ -26,12 +25,25 @@ spec:
         heritage: {{ .Release.Service }}
     spec:
       serviceAccountName: {{ include "openstack-manila-csi.serviceAccountName.controllerplugin" . }}
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: [{{ include "openstack-manila-csi.name" . }}]
+                  - key: component
+                    operator: In
+                    values: [controllerplugin]
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: provisioner
           image: "{{ .Values.csi.provisioner.image.repository }}:{{ .Values.csi.provisioner.image.tag }}"
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
+            - "--leader-election"
             {{- if .Values.csi.plugin.topologyAwarenessEnabled }}
             - "--feature-gates=Topology=true"
             {{- end }}
@@ -49,6 +61,7 @@ spec:
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
+            - "--leader-election"
           env:
             - name: ADDRESS
               value: "unix:///var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/csi-controllerplugin.sock"
@@ -63,6 +76,7 @@ spec:
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
+            - "--leader-election"
             - "--handle-volume-inuse-error=false"
           env:
             - name: ADDRESS

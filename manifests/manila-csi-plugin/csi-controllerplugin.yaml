@@ -1,19 +1,4 @@
-kind: Service
-apiVersion: v1
-metadata:
-  name: openstack-manila-csi-controllerplugin
-  labels:
-    app: openstack-manila-csi
-    component: controllerplugin
-spec:
-  selector:
-    app: openstack-manila-csi
-    component: controllerplugin
-  ports:
-    - name: dummy
-      port: 12345
----
-kind: StatefulSet
+kind: Deployment
 apiVersion: apps/v1
 metadata:
   name: openstack-manila-csi-controllerplugin
@@ -21,7 +6,6 @@ metadata:
     app: openstack-manila-csi
     component: controllerplugin
 spec:
-  serviceName: openstack-manila-csi-controllerplugin
   replicas: 1
   selector:
     matchLabels:
@@ -34,12 +18,25 @@ spec:
         component: controllerplugin
     spec:
       serviceAccountName: openstack-manila-csi-controllerplugin
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            - labelSelector:
+                matchExpressions:
+                  - key: app
+                    operator: In
+                    values: [openstack-manila-csi]
+                  - key: component
+                    operator: In
+                    values: [controllerplugin]
+              topologyKey: kubernetes.io/hostname
       containers:
         - name: provisioner
           image: "quay.io/k8scsi/csi-provisioner:v2.0.2"
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
+            - "--leader-election"
             # To enable topology awareness in csi-provisioner, uncomment the following line:
             # - "--feature-gates=Topology=true"
           env:
@@ -54,6 +51,7 @@ spec:
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
+            - "--leader-election"
           env:
             - name: ADDRESS
               value: "unix:///var/lib/kubelet/plugins/manila.csi.openstack.org/csi-controllerplugin.sock"
@@ -66,6 +64,7 @@ spec:
           args:
             - "--v=5"
             - "--csi-address=$(ADDRESS)"
+            - "--leader-election"
             - "--handle-volume-inuse-error=false"
           env:
             - name: ADDRESS
@@ -74,7 +73,7 @@ spec:
           volumeMounts:
             - name: plugin-dir
               mountPath: /var/lib/kubelet/plugins/manila.csi.openstack.org
-        - name: nodeplugin
+        - name: controllerplugin
           securityContext:
             privileged: true
             capabilities:
