@@ -58,6 +58,21 @@ spec:
               mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
           resources:
 {{ toYaml .Values.csi.snapshotter.resources | indent 12 }}
+        - name: resizer
+          image: "{{ .Values.csi.resizer.image.repository }}:{{ .Values.csi.resizer.image.tag }}"
+          args:
+            - "--v=5"
+            - "--csi-address=$(ADDRESS)"
+            - "--handle-volume-inuse-error=false"
+          env:
+            - name: ADDRESS
+              value: "unix:///var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/csi-controllerplugin.sock"
+          imagePullPolicy: {{ .Values.csi.snapshotter.image.pullPolicy }}
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
+          resources:
+{{ toYaml .Values.csi.resizer.resources | indent 12 }}
         - name: controllerplugin
           securityContext:
             privileged: true

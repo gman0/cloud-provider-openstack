@@ -47,6 +47,7 @@ var (
 	controllerServiceCapsTypes = []csi.ControllerServiceCapability_RPC_Type{
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_VOLUME,
 		csi.ControllerServiceCapability_RPC_CREATE_DELETE_SNAPSHOT,
+		csi.ControllerServiceCapability_RPC_EXPAND_VOLUME,
 	}
 
 	// Supported Controller service capabilities
@@ -453,5 +454,52 @@ func (cs *controllerServer) ListSnapshots(context.Context, *csi.ListSnapshotsReq
 }
 
 func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi.ControllerExpandVolumeRequest) (*csi.ControllerExpandVolumeResponse, error) {
-	return nil, status.Error(codes.Unimplemented, "")
+	if err := validateControllerExpandVolumeRequest(req); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+
+	// Configuration
+
+	osOpts, err := options.NewOpenstackOptions(req.GetSecrets())
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "invalid OpenStack secrets: %v", err)
+	}
+
+	manilaClient, err := cs.d.ManilaClientBuilder.New(osOpts)
+	if err != nil {
+		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
+	}
+
+	// Retrieve the share by its ID
+
+	share, err := manilaClient.GetShareByID(req.GetVolumeId())
+	if err != nil {
+		if clouderrors.IsNotFound(err) {
+			return nil, status.Errorf(codes.NotFound, "share %s not found: %v", req.GetVolumeId(), err)
+		}
+
+		return nil, status.Errorf(codes.Internal, "failed to retrieve share %s: %v", req.GetVolumeId(), err)
+	}
+
+	// Try to resize the share
+
+	currentSizeInBytes := int64(share.Size * bytesInGiB)
+
+	if currentSizeInBytes >= req.GetCapacityRange().GetRequiredBytes() {
+		// Share is already resized
+
+		return &csi.ControllerExpandVolumeResponse{
+			CapacityBytes: currentSizeInBytes,
+		}, nil
+	}
+
+	desiredSizeInGB := int(req.GetCapacityRange().GetRequiredBytes() / bytesInGiB)
+
+	if err := extendShare(share, desiredSizeInGB, manilaClient); err != nil {
+		return nil, err
+	}
+
+	return &csi.ControllerExpandVolumeResponse{
+		CapacityBytes: int64(desiredSizeInGB * bytesInGiB),
+	}, nil
 }

@@ -3,6 +3,7 @@ kind: StorageClass
 metadata:
   name: csi-manila-nfs
 provisioner: manila.csi.openstack.org
+allowVolumeExpansion: true
 parameters:
   # Manila share type
   type: default
@@ -12,6 +13,8 @@ parameters:
 
   csi.storage.k8s.io/provisioner-secret-name: csi-manila-secrets
   csi.storage.k8s.io/provisioner-secret-namespace: default
+  csi.storage.k8s.io/controller-expand-secret-name: csi-manila-secrets
+  csi.storage.k8s.io/controller-expand-secret-namespace: default
   csi.storage.k8s.io/node-stage-secret-name: csi-manila-secrets
   csi.storage.k8s.io/node-stage-secret-namespace: default
   csi.storage.k8s.io/node-publish-secret-name: csi-manila-secrets

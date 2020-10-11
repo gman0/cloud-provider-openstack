@@ -21,6 +21,8 @@ import (
 	"time"
 
 	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/shares"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
 	clouderrors "k8s.io/cloud-provider-openstack/pkg/util/errors"
@@ -31,11 +33,13 @@ const (
 	waitForAvailableShareTimeout = 3
 	waitForAvailableShareRetries = 10
 
-	shareCreating      = "creating"
-	shareDeleting      = "deleting"
-	shareError         = "error"
-	shareErrorDeleting = "error_deleting"
-	shareAvailable     = "available"
+	shareCreating       = "creating"
+	shareDeleting       = "deleting"
+	shareExtending      = "extending"
+	shareError          = "error"
+	shareErrorDeleting  = "error_deleting"
+	shareErrorExtending = "extending_error"
+	shareAvailable      = "available"
 
 	shareDescription = "provisioned-by=manila.csi.openstack.org"
 )
@@ -104,6 +108,27 @@ func tryDeleteShare(share *shares.Share, manilaClient manilaclient.Interface) {
 	}
 }
 
+func extendShare(share *shares.Share, newSizeGB int, manilaClient manilaclient.Interface) error {
+	opts := shares.ExtendOpts{
+		NewSize: newSizeGB,
+	}
+
+	if err := manilaClient.ExtendShare(share.ID, opts); err != nil {
+		return err
+	}
+
+	share, manilaErrCode, err := waitForShareStatus(share.ID, shareExtending, shareAvailable, false, manilaClient)
+	if err != nil {
+		if err == wait.ErrWaitTimeout {
+			return status.Errorf(codes.DeadlineExceeded, "deadline exceeded while waiting for share %s to become available", share.ID)
+		}
+
+		return status.Errorf(manilaErrCode.toRpcErrorCode(), "failed to resize share %s: %v", share.ID, err)
+	}
+
+	return nil
+}
+
 func waitForShareStatus(shareID, currentStatus, desiredStatus string, successOnNotFound bool, manilaClient manilaclient.Interface) (*shares.Share, manilaError, error) {
 	var (
 		backoff = wait.Backoff{
@@ -135,14 +160,14 @@ func waitForShareStatus(shareID, currentStatus, desiredStatus string, successOnN
 			isAvailable = false
 		case desiredStatus:
 			isAvailable = true
-		case shareError:
+		case shareError, shareErrorDeleting, shareErrorExtending:
 			manilaErrMsg, err := lastResourceError(shareID, manilaClient)
 			if err != nil {
 				return false, fmt.Errorf("share %s is in error state, error description could not be retrieved: %v", shareID, err)
 			}
 
 			manilaErrCode = manilaErrMsg.errCode
-			return false, fmt.Errorf("share %s is in error state: %s", shareID, manilaErrMsg.message)
+			return false, fmt.Errorf("share %s is in %s state: %s", shareID, share.Status, manilaErrMsg.message)
 		default:
 			return false, fmt.Errorf("share %s is in an unexpected state: wanted either %s or %s, got %s", shareID, currentStatus, desiredStatus, share.Status)
 		}

@@ -31,6 +31,8 @@ type Client struct {
 	c *gophercloud.ServiceClient
 }
 
+var _ Interface = &Client{}
+
 func (c Client) GetShareByID(shareID string) (*shares.Share, error) {
 	return shares.Get(c.c, shareID).Extract()
 }
@@ -50,6 +52,10 @@ func (c Client) CreateShare(opts shares.CreateOptsBuilder) (*shares.Share, error
 
 func (c Client) DeleteShare(shareID string) error {
 	return shares.Delete(c.c, shareID).ExtractErr()
+}
+
+func (c Client) ExtendShare(shareID string, opts shares.ExtendOptsBuilder) error {
+	return shares.Extend(c.c, shareID, opts).ExtractErr()
 }
 
 func (c Client) GetExportLocations(shareID string) ([]shares.ExportLocation, error) {

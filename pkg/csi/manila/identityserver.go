@@ -40,16 +40,30 @@ func newIdentityServer(d *Driver) *identityServer {
 		serviceCaps = append(serviceCaps, csi.PluginCapability_Service_VOLUME_ACCESSIBILITY_CONSTRAINTS)
 	}
 
-	caps := make([]*csi.PluginCapability, len(serviceCaps))
+	volumeExpansionCaps := []csi.PluginCapability_VolumeExpansion_Type{
+		csi.PluginCapability_VolumeExpansion_ONLINE,
+	}
+
+	var caps []*csi.PluginCapability
 
 	for i := range serviceCaps {
-		caps[i] = &csi.PluginCapability{
+		caps = append(caps, &csi.PluginCapability{
 			Type: &csi.PluginCapability_Service_{
 				Service: &csi.PluginCapability_Service{
 					Type: serviceCaps[i],
 				},
 			},
-		}
+		})
+	}
+
+	for i := range volumeExpansionCaps {
+		caps = append(caps, &csi.PluginCapability{
+			Type: &csi.PluginCapability_VolumeExpansion_{
+				VolumeExpansion: &csi.PluginCapability_VolumeExpansion{
+					Type: volumeExpansionCaps[i],
+				},
+			},
+		})
 	}
 
 	return &identityServer{
