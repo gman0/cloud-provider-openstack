@@ -46,7 +46,7 @@ type DriverOpts struct {
 	ManilaClientBuilder manilaclient.Builder
 	CSIClientBuilder    csiclient.Builder
 
-	CompatOpts *options.CompatibilityOptions
+	CompatOpts []options.CompatibilityOptions
 }
 
 func (o *DriverOpts) validate() error {
@@ -79,7 +79,11 @@ func (o *DriverOpts) validate() error {
 	}
 	o.ServerCSIEndpoint = endpointAddress(proto, addr)
 
+	enabledAdaptersMap := make(map[string]struct{}, len(o.EnabledAdapterOpts))
+
 	for i := range o.EnabledAdapterOpts {
+		enabledAdaptersMap[o.EnabledAdapterOpts[i].Name] = struct{}{}
+
 		if o.EnabledAdapterOpts[i].NodePluginEndpoint == "" {
 			continue
 		}
@@ -91,6 +95,13 @@ func (o *DriverOpts) validate() error {
 		}
 
 		o.EnabledAdapterOpts[i].NodePluginEndpoint = endpointAddress(proto, addr)
+	}
+
+	for i := range o.CompatOpts {
+		if _, ok := enabledAdaptersMap[o.CompatOpts[i].Name]; !ok {
+			return fmt.Errorf("setting compatibility options for unknown or disabled adapter %s",
+				o.CompatOpts[i].Name)
+		}
 	}
 
 	return nil
@@ -109,6 +120,9 @@ type Driver struct {
 	enabledAdapters map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter
 	// Subset of `enabledAdapters` with `NodePluginEndpoint` defined
 	enabledAdaptersWithNodePlugins map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter
+
+	// Compatibility options map for enabled adapters
+	adapterCompatMap map[shareadapters.ShareAdapterType]options.CompatibilityOptions
 }
 
 const (
@@ -128,6 +142,8 @@ func NewDriver(opts *DriverOpts) (*Driver, error) {
 
 		enabledAdapters:                make(map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter),
 		enabledAdaptersWithNodePlugins: make(map[shareadapters.ShareAdapterType]shareadapters.ShareAdapter),
+
+		adapterCompatMap: make(map[shareadapters.ShareAdapterType]options.CompatibilityOptions),
 	}
 
 	klog.Info("Driver: ", d.DriverName)
@@ -190,6 +206,22 @@ func NewDriver(opts *DriverOpts) (*Driver, error) {
 			d.enabledAdaptersWithNodePlugins[adapterType] = adapter
 			klog.Infof("Associating %s adapter with %#v", adapterOpts.Name, adapter.GetCSINodePluginInfo())
 		}
+	}
+
+	// Initialize compat settings for adapters
+
+	for _, compatOpts := range opts.CompatOpts {
+		klog.Infof("Configuring adapter %s with %#v", compatOpts.Name, compatOpts)
+
+		adapterType := shareadapters.ShareAdapterNameTypeMap[compatOpts.Name]
+
+		if _, ok := d.adapterCompatMap[adapterType]; ok {
+			// Setting compatibility options for the same share adapter twice
+			// may be a configuration error and is therefore not allowed.
+			return nil, fmt.Errorf("compatibility options for adapter %s are already set", compatOpts.Name)
+		}
+
+		d.adapterCompatMap[adapterType] = compatOpts
 	}
 
 	// Initialize Identity server

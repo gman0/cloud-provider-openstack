@@ -13,19 +13,41 @@ limitations under the License.
 
 package options
 
-import "k8s.io/cloud-provider-openstack/pkg/csi/manila/validator"
+import (
+	"fmt"
+
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/validator"
+)
 
 type CompatibilityOptions struct {
-	CreateShareFromSnapshotEnabled         string `name:"CreateShareFromSnapshotEnabled" value:"default:false" matches:"^true|false$"`
-	CreateShareFromSnapshotRetries         string `name:"CreateShareFromSnapshotRetries" value:"default:10" matches:"^[0-9]+$"`
-	CreateShareFromSnapshotBackoffInterval string `name:"CreateShareFromSnapshotBackoffInterval" value:"default:5" matches:"^[0-9]+$"`
+	Name string `name:"name"`
+
+	CreateShareFromSnapshotEnabled         string `name:"create-share-from-snapshot-enabled" value:"default:false" matches:"^true|false$"`
+	CreateShareFromSnapshotRetries         string `name:"create-share-from-snapshot-retries" value:"default:10" matches:"^[0-9]+$"`
+	CreateShareFromSnapshotBackoffInterval string `name:"create-share-from-snapshot-backoff-interval" value:"default:5" matches:"^[0-9]+$"`
 }
 
 var (
 	compatOptionsValidator = validator.New(&CompatibilityOptions{})
 )
 
-func NewCompatibilityOptions(data map[string]string) (*CompatibilityOptions, error) {
+func NewCompatibilityOptions(data map[string]string, validAdapterNames []string) (*CompatibilityOptions, error) {
 	opts := &CompatibilityOptions{}
-	return opts, compatOptionsValidator.Populate(data, opts)
+	err := compatOptionsValidator.Populate(data, opts)
+
+	if err == nil {
+		var found bool
+		for _, name := range validAdapterNames {
+			if name == opts.Name {
+				found = true
+				break
+			}
+		}
+
+		if !found {
+			return nil, fmt.Errorf("unknown share adapter %s", opts.Name)
+		}
+	}
+
+	return opts, nil
 }

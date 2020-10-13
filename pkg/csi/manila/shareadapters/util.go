@@ -33,3 +33,14 @@ func splitExportLocationPath(exportLocationPath string) (address, location strin
 
 	return
 }
+
+func Find(proto string, adapters map[ShareAdapterType]ShareAdapter) (ShareAdapter, error) {
+	// Try to find a suitable adapter by share protocol
+	if t, ok := ShareAdapterNameTypeMap[strings.ToLower(proto)]; ok {
+		if adapter, ok := adapters[t]; ok {
+			return adapter, nil
+		}
+	}
+
+	return nil, fmt.Errorf("adapter for share protocol %s either not available or not enabled", proto)
+}

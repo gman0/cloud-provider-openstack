@@ -54,8 +54,8 @@ type nodeVolumeInfo struct {
 // enough to survive redeployment of the driver on the node.
 // Losing this mapping will result in volume unstage/unpublish
 // failure.
-// For Kubernetes, using an hostPath volume is recommended to
-// store this files.
+// For Kubernetes, using a hostPath volume is recommended to
+// store these files.
 type nodeMountInfo struct {
 	AdapterType shareadapters.ShareAdapterType
 }
@@ -144,7 +144,7 @@ func (ns *nodeServer) getVolumeInfo(volID volumeID, shareOpts *options.NodeVolum
 
 	// Get a share adapter for this share
 
-	adapter, err := getShareAdapter(share.ShareProto, ns.d.enabledAdaptersWithNodePlugins)
+	adapter, err := shareadapters.Find(share.ShareProto, ns.d.enabledAdaptersWithNodePlugins)
 	if err != nil {
 		return nil, status.Errorf(codes.FailedPrecondition, "failed to find an appropriate adapter for volume %s (share ID %s): %v", volID, share.ID, err)
 	}

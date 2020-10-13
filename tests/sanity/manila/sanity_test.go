@@ -66,7 +66,7 @@ func TestDriver(t *testing.T) {
 			ServerCSIEndpoint:   endpoint,
 			ManilaClientBuilder: &fakeManilaClientBuilder{},
 			CSIClientBuilder:    &fakeCSIClientBuilder{},
-			CompatOpts:          &options.CompatibilityOptions{},
+			CompatOpts:          []options.CompatibilityOptions{},
 		})
 
 	if err != nil {

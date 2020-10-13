@@ -14,32 +14,34 @@ limitations under the License.
 package compatibility
 
 import (
-	"github.com/container-storage-interface/spec/lib/go/csi"
-	"github.com/gophercloud/gophercloud/openstack/sharedfilesystems/v2/shares"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/capabilities"
-	"k8s.io/cloud-provider-openstack/pkg/csi/manila/csiclient"
-	"k8s.io/cloud-provider-openstack/pkg/csi/manila/manilaclient"
-	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/shareadapters"
 )
 
-type Layer interface {
-	SupplementCapability(compatOpts *options.CompatibilityOptions, dstShare *shares.Share, dstShareAccessRight *shares.AccessRight, req *csi.CreateVolumeRequest, adapter shareadapters.ShareAdapter, manilaClient manilaclient.Interface, csiClientBuilder csiclient.Builder) error
+type (
+	CompatArgs struct {
+		res *jobResult
+
+		CreateShareFromSnapshot *CreateShareFromSnapshotCompatArgs
+	}
+
+	Compat func(*CompatArgs) error
+
+	CompatMap map[shareadapters.ShareAdapterType]Compat
+)
+
+var capCompatMap = map[capabilities.ManilaCapability]CompatMap{
+	capabilities.ManilaCapabilityShareFromSnapshot: createShareFromSnapshotCompatMap,
 }
 
 // Certain share protocols may not support certain Manila capabilities
 // in a given share type. This map forms a compatibility layer which
 // fills in the feature gap with in-driver functionality.
-var compatCaps = map[string]map[capabilities.ManilaCapability]Layer{}
-
-func FindCompatibilityLayer(shareProto string, wantsCap capabilities.ManilaCapability, shareTypeCaps capabilities.ManilaCapabilities) Layer {
-	if layers, ok := compatCaps[shareProto]; ok {
-		if hasCapability := shareTypeCaps[wantsCap]; !hasCapability {
-			if compatCapability, ok := layers[wantsCap]; ok {
-				return compatCapability
-			}
-		}
+func CompatForManilaCap(manilaCap capabilities.ManilaCapability, adapterType shareadapters.ShareAdapterType) Compat {
+	compatMap, ok := capCompatMap[manilaCap]
+	if !ok {
+		return nil
 	}
 
-	return nil
+	return compatMap[adapterType]
 }

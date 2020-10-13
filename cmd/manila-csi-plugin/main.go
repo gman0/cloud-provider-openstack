@@ -35,18 +35,18 @@ import (
 )
 
 var (
-	endpoint              string
-	driverName            string
-	nodeID                string
-	nodeAZ                string
-	mountInfoDir          string
-	runtimeConfigFile     string
-	withTopology          bool
-	protoSelector         string // Deprecated
-	fwdEndpoint           string // Deprecated
-	enabledAdapters       []string
-	userAgentData         []string
-	compatibilitySettings string
+	endpoint                     string
+	driverName                   string
+	nodeID                       string
+	nodeAZ                       string
+	mountInfoDir                 string
+	runtimeConfigFile            string
+	withTopology                 bool
+	protoSelector                string // Deprecated
+	fwdEndpoint                  string // Deprecated
+	enabledAdapters              []string
+	adapterCompatibilitySettings []string
+	userAgentData                []string
 )
 
 func parseMapFromOption(s string) (map[string]string, error) {
@@ -102,6 +102,26 @@ func parseAdapterOptions_v1(validAdapters []string) ([]options.AdapterOptions, e
 		opt, err := options.NewAdapterOptions(m, validAdapters)
 		if err != nil {
 			return nil, fmt.Errorf("failed to validate --enable-adapter %s: %v", enabledAdapters[i], err)
+		}
+
+		opts[i] = *opt
+	}
+
+	return opts, nil
+}
+
+func parseCompatibilityOptions(validAdapters []string) ([]options.CompatibilityOptions, error) {
+	opts := make([]options.CompatibilityOptions, len(adapterCompatibilitySettings))
+
+	for i := range adapterCompatibilitySettings {
+		m, err := parseMapFromOption(adapterCompatibilitySettings[i])
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse --adapter-compatibility %s: %v", adapterCompatibilitySettings[i], err)
+		}
+
+		opt, err := options.NewCompatibilityOptions(m, validAdapters)
+		if err != nil {
+			return nil, fmt.Errorf("failed to validate --adapter-compatibility %s: %v", adapterCompatibilitySettings[i], err)
 		}
 
 		opts[i] = *opt
@@ -217,7 +237,7 @@ func main() {
 
 	cmd.PersistentFlags().StringArrayVar(&enabledAdapters, "enable-adapter", nil, "enables a share adapter. Repeat for each share adapter you wish to enable.")
 
-	cmd.PersistentFlags().StringVar(&compatibilitySettings, "compatibility-settings", "", "settings for the compatibility layer")
+	cmd.PersistentFlags().StringArrayVar(&adapterCompatibilitySettings, "adapter-compatibility", nil, "compatibility settings for an enabled share adapter. Repeat for each share adapter you wish to configure.")
 
 	cmd.PersistentFlags().StringArrayVar(&userAgentData, "user-agent", nil, "extra data to add to gophercloud user-agent. Use multiple times to add more than one component.")
 

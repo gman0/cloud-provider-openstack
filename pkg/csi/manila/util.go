@@ -124,8 +124,12 @@ func fmtGrpcConnError(fwdEndpoint string, err error) string {
 }
 
 func fmtGrpcStatusError(err error, pluginInfo *shareadapters.CSINodePluginInfo) error {
+	return wrapGrpcError(pluginInfo.Name, err)
+}
+
+func wrapGrpcError(wrapMsg string, err error) error {
 	statusErr, _ := status.FromError(err)
-	return status.Errorf(statusErr.Code(), "%s: %v", pluginInfo.Name, statusErr.Message())
+	return status.Errorf(statusErr.Code(), "%s: %v", wrapMsg, statusErr.Message())
 }
 
 func bytesToGiB(sizeInBytes int64) int {
@@ -163,12 +167,25 @@ func compareProtocol(protoA, protoB string) bool {
 	return strings.ToUpper(protoA) == strings.ToUpper(protoB)
 }
 
-func tryCompatForVolumeSource(compatOpts *options.CompatibilityOptions, shareOpts *options.ControllerVolumeContext, source *csi.VolumeContentSource, shareTypeCaps capabilities.ManilaCapabilities) compatibility.Layer {
-	if source != nil {
-		if source.GetSnapshot() != nil && shareTypeCaps[capabilities.ManilaCapabilitySnapshot] {
-			if createShareFromSnapshotEnabled, _ := strconv.ParseBool(compatOpts.CreateShareFromSnapshotEnabled); createShareFromSnapshotEnabled {
-				return compatibility.FindCompatibilityLayer(shareOpts.Protocol, capabilities.ManilaCapabilityShareFromSnapshot, shareTypeCaps)
-			}
+func tryCompatForVolumeSource(compatOpts *options.CompatibilityOptions, adapterType shareadapters.ShareAdapterType, source *csi.VolumeContentSource, shareTypeCaps capabilities.ManilaCapabilities) compatibility.Compat {
+	if compatOpts == nil || source == nil {
+		return nil
+	}
+
+	// Try compatibility mode for snapshot volume source
+
+	if source.GetSnapshot() != nil {
+		// Volume source is a snapshot
+
+		if !shareTypeCaps[capabilities.ManilaCapabilitySnapshot] {
+			// This share type doesn't even support snapshots, must be a bad request
+			return nil
+		}
+
+		if createShareFromSnapshotEnabled, _ := strconv.ParseBool(compatOpts.CreateShareFromSnapshotEnabled); createShareFromSnapshotEnabled {
+			// Compatibility mode for create_share_from_snapshot_support
+			// for this share adapter is enabled. Try to find it.
+			return compatibility.CompatForManilaCap(capabilities.ManilaCapabilityShareFromSnapshot, adapterType)
 		}
 	}
 
@@ -279,8 +296,13 @@ func verifyVolumeCompatibility(sizeInGiB int, req *csi.CreateVolumeRequest, shar
 		reqSrcSnapID = req.GetVolumeContentSource().GetSnapshot().GetSnapshotId()
 	}
 
-	if share.SnapshotID != reqSrcSnapID {
-		return fmt.Errorf("source snapshot ID mismatch: wanted %s, got %s", coalesceValue(share.SnapshotID), coalesceValue(reqSrcSnapID))
+	srcSnapID := share.SnapshotID
+	if srcSnapID == "" {
+		srcSnapID, _ = compatibility.SplitCreatedFromSnapshotInfo(share.Metadata[compatibility.CreatedFromSnapshotTag])
+	}
+
+	if srcSnapID != reqSrcSnapID {
+		return fmt.Errorf("source snapshot ID mismatch: wanted %s, got %s", coalesceValue(srcSnapID), coalesceValue(reqSrcSnapID))
 	}
 
 	return nil

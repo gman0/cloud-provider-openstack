@@ -18,7 +18,6 @@ package manila
 
 import (
 	"context"
-	"strings"
 	"sync"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -27,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/capabilities"
+	"k8s.io/cloud-provider-openstack/pkg/csi/manila/compatibility"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/options"
 	"k8s.io/cloud-provider-openstack/pkg/csi/manila/shareadapters"
 	clouderrors "k8s.io/cloud-provider-openstack/pkg/util/errors"
@@ -75,7 +75,7 @@ func newControllerServer(d *Driver) *controllerServer {
 	}
 }
 
-func getVolumeCreator(source *csi.VolumeContentSource, shareOpts *options.ControllerVolumeContext, compatOpts *options.CompatibilityOptions, shareTypeCaps capabilities.ManilaCapabilities) (volumeCreator, error) {
+func getVolumeCreator(adapterType shareadapters.ShareAdapterType, source *csi.VolumeContentSource, shareOpts *options.ControllerVolumeContext, compatOpts *options.CompatibilityOptions, shareTypeCaps capabilities.ManilaCapabilities) (volumeCreator, error) {
 	if source == nil {
 		return &blankVolume{}, nil
 	}
@@ -85,9 +85,13 @@ func getVolumeCreator(source *csi.VolumeContentSource, shareOpts *options.Contro
 	}
 
 	if source.GetSnapshot() != nil {
-		if tryCompatForVolumeSource(compatOpts, shareOpts, source, shareTypeCaps) != nil {
-			klog.Infof("share type %s does not advertise create_share_from_snapshot_support capability, compatibility mode is available", shareOpts.Type)
-			return &blankVolume{}, nil
+		if tryCompatForVolumeSource(compatOpts, adapterType, source, shareTypeCaps) != nil {
+			klog.Infof("share type %s does not advertise create_share_from_snapshot_support capability, but a compatibility mode is available, so use it", shareOpts.Type)
+			return &blankVolume{
+				extraMetadata: map[string]string{
+					compatibility.CreatedFromSnapshotTag: compatibility.BuildCreatedFromSnapshotInfo(
+						compatibility.CreatedFromSnapshotPending, source.GetSnapshot().GetSnapshotId())},
+			}, nil
 		}
 
 		return &volumeFromSnapshot{}, nil
@@ -137,7 +141,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.InvalidArgument, "invalid OpenStack secrets: %v", err)
 	}
 
-	adapter, err := getShareAdapter(shareOpts.Protocol, cs.d.enabledAdapters)
+	adapter, err := shareadapters.Find(shareOpts.Protocol, cs.d.enabledAdapters)
 	if err != nil {
 		return nil, status.Errorf(codes.InvalidArgument, "failed to choose a share adapter: %v", err)
 	}
@@ -168,7 +172,12 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// Retrieve an existing share or create a new one
 
-	volCreator, err := getVolumeCreator(req.GetVolumeContentSource(), shareOpts, cs.d.CompatOpts, shareTypeCaps)
+	var compatOpts *options.CompatibilityOptions
+	if val, ok := cs.d.adapterCompatMap[adapter.Type()]; ok {
+		compatOpts = &val
+	}
+
+	volCreator, err := getVolumeCreator(adapter.Type(), req.GetVolumeContentSource(), shareOpts, compatOpts, shareTypeCaps)
 	if err != nil {
 		return nil, err
 	}
@@ -178,7 +187,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, err
 	}
 
-	if err = verifyVolumeCompatibility(sizeInGiB, req, share, shareOpts, cs.d.CompatOpts, shareTypeCaps); err != nil {
+	if err = verifyVolumeCompatibility(sizeInGiB, req, share, shareOpts, compatOpts, shareTypeCaps); err != nil {
 		return nil, status.Errorf(codes.AlreadyExists, "a share named %s already exists, but is incompatible with the request: %v", req.GetName(), err)
 	}
 
@@ -195,12 +204,25 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.Internal, "failed to grant access for share %s: %v", share.ID, err)
 	}
 
-	// Check if compatibility layer is needed and can be used
-	if compatLayer := tryCompatForVolumeSource(cs.d.CompatOpts, shareOpts, req.GetVolumeContentSource(), shareTypeCaps); compatLayer != nil {
-		if err = compatLayer.SupplementCapability(cs.d.CompatOpts, share, accessRight, req, adapter, manilaClient, cs.d.CSIClientBuilder); err != nil {
-			// An error occurred, the user must clean the share manually
-			// TODO needs proper monitoring
-			return nil, err
+	// Check if compatibility mode is needed and can be used
+	if compat := tryCompatForVolumeSource(compatOpts, adapter.Type(), req.GetVolumeContentSource(), shareTypeCaps); compat != nil {
+		var compatArgs compatibility.CompatArgs
+
+		if req.GetVolumeContentSource().GetSnapshot() != nil {
+			compatArgs.CreateShareFromSnapshot = &compatibility.CreateShareFromSnapshotCompatArgs{
+				Ctx:              ctx,
+				Adapter:          adapter,
+				CreateVolumeReq:  req,
+				CompatOpts:       compatOpts,
+				DestShare:        share,
+				DestShareAccess:  accessRight,
+				ManilaClient:     manilaClient,
+				CsiClientBuilder: cs.d.CSIClientBuilder,
+			}
+		}
+
+		if err = compat(&compatArgs); err != nil {
+			return nil, wrapGrpcError("compatibility mode for create_share_from_snapshot_support failed", err)
 		}
 	}
 
@@ -282,10 +304,27 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		return nil, status.Errorf(codes.Internal, "failed to retrieve source share %s when creating a snapshot (%s): %v", req.GetSourceVolumeId(), req.GetName(), err)
 	}
 
-	if strings.ToUpper(sourceShare.ShareProto) == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Creating CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.Unimplemented, "the driver doesn't support snapshotting CephFS shares yet")
+	adapter, err := shareadapters.Find(sourceShare.ShareProto, cs.d.enabledAdapters)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "failed to choose a share adapter: %v", err)
+	}
+
+	// Make sure snapshotting and creating shares from snapshots is supported by this share type
+
+	shareTypeCaps, err := capabilities.GetManilaCapabilities(sourceShare.ShareType, manilaClient)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get Manila capabilities for share type %s: %v", sourceShare.ShareType, err)
+	}
+
+	if !shareTypeCaps[capabilities.ManilaCapabilitySnapshot] {
+		return nil, status.Errorf(codes.InvalidArgument, "share type %s does not advertise snapshot_support capability", sourceShare.ShareType)
+	}
+
+	if !shareTypeCaps[capabilities.ManilaCapabilityShareFromSnapshot] {
+		if compatibility.CompatForManilaCap(capabilities.ManilaCapabilityShareFromSnapshot, adapter.Type()) == nil {
+			return nil, status.Errorf(codes.InvalidArgument, "share type %s does not advertise create_share_from_snapshot_support capability, and no compatibility mode is available",
+				sourceShare.ShareType)
+		}
 	}
 
 	// Retrieve an existing snapshot or create a new one

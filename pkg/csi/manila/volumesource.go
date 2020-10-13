@@ -32,9 +32,13 @@ type volumeCreator interface {
 	create(req *csi.CreateVolumeRequest, shareName string, sizeInGiB int, manilaClient manilaclient.Interface, shareOpts *options.ControllerVolumeContext) (*shares.Share, error)
 }
 
-type blankVolume struct{}
+type blankVolume struct {
+	// Append extra metadata to the new share.
+	// Has effect only on newly created shares.
+	extraMetadata map[string]string
+}
 
-func (blankVolume) create(req *csi.CreateVolumeRequest, shareName string, sizeInGiB int, manilaClient manilaclient.Interface, shareOpts *options.ControllerVolumeContext) (*shares.Share, error) {
+func (cr blankVolume) create(req *csi.CreateVolumeRequest, shareName string, sizeInGiB int, manilaClient manilaclient.Interface, shareOpts *options.ControllerVolumeContext) (*shares.Share, error) {
 	klog.V(4).Infof("creating a new share (%s) in AZ %s", shareName, coalesceValue(shareOpts.AvailabilityZone))
 
 	createOpts := &shares.CreateOpts{
@@ -45,6 +49,7 @@ func (blankVolume) create(req *csi.CreateVolumeRequest, shareName string, sizeIn
 		Name:             shareName,
 		Description:      shareDescription,
 		Size:             sizeInGiB,
+		Metadata:         cr.extraMetadata,
 	}
 
 	share, manilaErrCode, err := getOrCreateShare(shareName, createOpts, manilaClient)
@@ -64,9 +69,13 @@ func (blankVolume) create(req *csi.CreateVolumeRequest, shareName string, sizeIn
 	return share, err
 }
 
-type volumeFromSnapshot struct{}
+type volumeFromSnapshot struct {
+	// Append extra metadata to the new share.
+	// Has effect only on newly created shares.
+	extraMetadata map[string]string
+}
 
-func (volumeFromSnapshot) create(req *csi.CreateVolumeRequest, shareName string, sizeInGiB int, manilaClient manilaclient.Interface, shareOpts *options.ControllerVolumeContext) (*shares.Share, error) {
+func (cr volumeFromSnapshot) create(req *csi.CreateVolumeRequest, shareName string, sizeInGiB int, manilaClient manilaclient.Interface, shareOpts *options.ControllerVolumeContext) (*shares.Share, error) {
 	snapshotSource := req.GetVolumeContentSource().GetSnapshot()
 
 	if shareOpts.Protocol == "CEPHFS" {
@@ -106,6 +115,7 @@ func (volumeFromSnapshot) create(req *csi.CreateVolumeRequest, shareName string,
 		Name:             shareName,
 		Description:      shareDescription,
 		Size:             sizeInGiB,
+		Metadata:         cr.extraMetadata,
 	}
 
 	share, manilaErrCode, err := getOrCreateShare(shareName, createOpts, manilaClient)
