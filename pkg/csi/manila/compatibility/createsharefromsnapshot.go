@@ -67,7 +67,9 @@ const (
 	CreatedFromSnapshotValueSeparator = "/"
 )
 
-var createShareFromSnapshotCompatMap = map[shareadapters.ShareAdapterType]Compat{}
+var createShareFromSnapshotCompatMap = map[shareadapters.ShareAdapterType]Compat{
+	shareadapters.CephfsType: createShareFromSnapshotCephfs,
+}
 
 func BuildCreatedFromSnapshotInfo(status, snapshotID string) string {
 	return fmt.Sprintf("%s%s%s", snapshotID, CreatedFromSnapshotValueSeparator, status)

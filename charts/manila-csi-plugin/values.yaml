@@ -40,11 +40,28 @@ csi:
       adapters:
         - name: nfs
         - name: cephfs
+          nodePluginEndpoint:
+            dir: /var/lib/kubelet/plugins/cephfs.csi.ceph.com
+            sockFile: csi.sock
+          compatibility:
+            createShareFromSnapshot:
+              enabled: true
+              # The associated node plugin must mount this path as a bi-directional mountpoint
+              # on the node. The volume pointing to this path must be of the hostPath kind.
+              # CSI CephFS mounts /var/lib/kubelet/plugins with bi-directional mount
+              # propagation by default, we can take advantage of that:
+              mountsDir: /var/lib/kubelet/plugins/cephfs.csi.ceph.com/node/mounts
+              # See man page for rsync --timeout
+              ioTimeout: 10
+              # If set to true, error output from rsync will be redirected into
+              # file "rsync-errors-<share name>.txt" on the destination share.
+              # Otherwise, it will go into STDERR.
+              stderrToFile: false
 
       # Active-passive high availability of CSI Manila's control plane is implemented using leader election.
       # The deployment uses Pod anti-affinity to spread the replicas to separate nodes of the cluster.
-      # `replicas` specifies the number of replicas of control plane to deploy.
-      replicas: 3
+      # `replicas` specifies the number of control plane replicas to deploy.
+      replicas: 1
 
       # Container resource constraints
       resources: {}
@@ -64,9 +81,9 @@ csi:
           #   dir: /var/lib/kubelet/plugins/csi-nfsplugin
           #   sockFile: csi.sock
         - name: cephfs
-          # nodePluginEndpoint:
-          #   dir: /var/lib/kubelet/plugins/cephfs.csi.ceph.com
-          #   sockFile: csi.sock
+          nodePluginEndpoint:
+            dir: /var/lib/kubelet/plugins/cephfs.csi.ceph.com
+            sockFile: csi.sock
 
       # Container resource constraints
       resources: {}

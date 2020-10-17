@@ -22,9 +22,11 @@ import (
 type CompatibilityOptions struct {
 	Name string `name:"name"`
 
-	CreateShareFromSnapshotEnabled         string `name:"create-share-from-snapshot-enabled" value:"default:false" matches:"^true|false$"`
-	CreateShareFromSnapshotRetries         string `name:"create-share-from-snapshot-retries" value:"default:10" matches:"^[0-9]+$"`
-	CreateShareFromSnapshotBackoffInterval string `name:"create-share-from-snapshot-backoff-interval" value:"default:5" matches:"^[0-9]+$"`
+	CreateShareFromSnapshotEnabled   string `name:"create-share-from-snapshot-enabled" value:"default:false" matches:"^true|false$"`
+	CreateShareFromSnapshotMountsDir string `name:"create-share-from-snapshot-mounts-dir" value:"optional"`
+
+	RsyncStderrToFile string `name:"rsync-stderr-to-file" value:"default:false" matches:"^true|false$"`
+	RsyncIoTimeout    string `name:"rsync-io-timeout" value:"default:false" value:"default:0" matches:"^[0-9]+$"`
 }
 
 var (

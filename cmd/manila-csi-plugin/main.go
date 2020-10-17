@@ -160,8 +160,12 @@ func main() {
 			})
 		},
 		Run: func(cmd *cobra.Command, args []string) {
-			var adapterOpts []options.AdapterOptions
-			var err error
+			var (
+				adapterOpts       []options.AdapterOptions
+				adapterCompatOpts []options.CompatibilityOptions
+
+				err error
+			)
 
 			if adapterOpts, err = parseAdapterOptions_v1(validAdapters); err != nil {
 				klog.Fatal(err.Error())
@@ -183,6 +187,15 @@ func main() {
 				}
 			}
 
+			validAdapters = validAdapters[:0]
+			for i := range adapterOpts {
+				validAdapters = append(validAdapters, adapterOpts[i].Name)
+			}
+
+			if adapterCompatOpts, err = parseCompatibilityOptions(validAdapters); err != nil {
+				klog.Fatalf(err.Error())
+			}
+
 			manilaClientBuilder := &manilaclient.ClientBuilder{UserAgent: "manila-csi-plugin", ExtraUserAgentData: userAgentData}
 			csiClientBuilder := &csiclient.ClientBuilder{}
 
@@ -193,6 +206,7 @@ func main() {
 					NodeAZ:              nodeAZ,
 					WithTopology:        withTopology,
 					EnabledAdapterOpts:  adapterOpts,
+					CompatOpts:          adapterCompatOpts,
 					MountInfoDir:        mountInfoDir,
 					ServerCSIEndpoint:   endpoint,
 					ManilaClientBuilder: manilaClientBuilder,

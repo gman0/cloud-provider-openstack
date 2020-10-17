@@ -17,6 +17,7 @@ limitations under the License.
 package shareadapters
 
 import (
+	"errors"
 	"fmt"
 	"time"
 
@@ -129,6 +130,14 @@ func (Cephfs) BuildVolumeContext(args *VolumeContextArgs) (volumeContext map[str
 }
 
 func (Cephfs) BuildNodeStageSecret(args *SecretArgs) (secret map[string]string, err error) {
+	if args.AccessRight.AccessTo == "" {
+		return nil, errors.New("user ID cannot be empty")
+	}
+
+	if args.AccessRight.AccessKey == "" {
+		return nil, errors.New("user key cannot be empty")
+	}
+
 	return map[string]string{
 		"userID":  args.AccessRight.AccessTo,
 		"userKey": args.AccessRight.AccessKey,
