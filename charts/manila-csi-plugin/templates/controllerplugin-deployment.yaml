@@ -54,8 +54,7 @@ spec:
           volumeMounts:
             - name: plugin-dir
               mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
-          resources:
-{{ toYaml .Values.csi.provisioner.resources | indent 12 }}
+          resources: {{ toYaml .Values.csi.provisioner.resources | nindent 12 }}
         - name: snapshotter
           image: "{{ .Values.csi.snapshotter.image.repository }}:{{ .Values.csi.snapshotter.image.tag }}"
           args:
@@ -69,8 +68,7 @@ spec:
           volumeMounts:
             - name: plugin-dir
               mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
-          resources:
-{{ toYaml .Values.csi.snapshotter.resources | indent 12 }}
+          resources: {{ toYaml .Values.csi.snapshotter.resources | nindent 12 }}
         - name: resizer
           image: "{{ .Values.csi.resizer.image.repository }}:{{ .Values.csi.resizer.image.tag }}"
           args:
@@ -85,8 +83,7 @@ spec:
           volumeMounts:
             - name: plugin-dir
               mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
-          resources:
-{{ toYaml .Values.csi.resizer.resources | indent 12 }}
+          resources: {{ toYaml .Values.csi.resizer.resources | nindent 12 }}
         - name: controllerplugin
           securityContext:
             privileged: true
@@ -152,8 +149,7 @@ spec:
             {{- end }}
             - name: mountinfo-dir
               mountPath: /csi/mountinfo
-          resources:
-{{ toYaml .Values.csi.plugin.controllerplugin.resources | indent 12 }}
+          resources: {{ toYaml .Values.csi.plugin.controllerplugin.resources | nindent 12 }}
       volumes:
         - name: plugin-dir
           hostPath:
@@ -188,15 +184,12 @@ spec:
           hostPath:
             path: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/node/mountinfo
             type: DirectoryOrCreate
-    {{- if .Values.csi.plugin.controllerplugin.affinity -}}
-      affinity:
-{{ toYaml .Values.csi.plugin.controllerplugin.affinity . | indent 8 }}
+    {{- if .Values.csi.plugin.controllerplugin.affinity }}
+      affinity: {{ toYaml .Values.csi.plugin.controllerplugin.affinity . | nindent 8 }}
+    {{- end }}
+    {{- if .Values.csi.plugin.controllerplugin.nodeSelector }}
+      nodeSelector: {{ toYaml .Values.csi.plugin.controllerplugin.nodeSelector | nindent 8 }}
     {{- end -}}
-    {{- if .Values.csi.plugin.controllerplugin.nodeSelector -}}
-      nodeSelector:
-{{ toYaml .Values.csi.plugin.controllerplugin.nodeSelector | indent 8 }}
-    {{- end -}}
-    {{- if .Values.csi.plugin.controllerplugin.tolerations -}}
-      tolerations:
-{{ toYaml .Values.csi.plugin.controllerplugin.tolerations | indent 8 }}
-    {{- end -}}
+    {{- if .Values.csi.plugin.controllerplugin.tolerations }}
+      tolerations: {{ toYaml .Values.csi.plugin.controllerplugin.tolerations | nindent 8 }}
+    {{- end }}

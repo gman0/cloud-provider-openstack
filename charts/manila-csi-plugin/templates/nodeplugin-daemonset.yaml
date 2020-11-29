@@ -50,8 +50,7 @@ spec:
               mountPath: /csi
             - name: registration-dir
               mountPath: /registration
-          resources:
-{{ toYaml .Values.csi.registrar.resources | indent 12 }}
+          resources: {{ toYaml .Values.csi.registrar.resources | nindent 12 }}
         - name: nodeplugin
           securityContext:
             privileged: true
@@ -101,8 +100,7 @@ spec:
             {{- end }}
             - name: mountinfo-dir
               mountPath: /csi/mountinfo
-          resources:
-{{ toYaml .Values.csi.plugin.nodeplugin.resources | indent 12 }}
+          resources: {{ toYaml .Values.csi.plugin.nodeplugin.resources | nindent 12 }}
       volumes:
         - name: registration-dir
           hostPath:
@@ -129,15 +127,12 @@ spec:
           hostPath:
             path: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/node/mountinfo
             type: DirectoryOrCreate
-    {{- if .Values.csi.plugin.nodeplugin.affinity -}}
-      affinity:
-{{ toYaml .Values.csi.plugin.nodeplugin.affinity . | indent 8 }}
-    {{- end -}}
-    {{- if .Values.csi.plugin.nodeplugin.nodeSelector -}}
-      nodeSelector:
-{{ toYaml .Values.csi.plugin.nodeplugin.nodeSelector | indent 8 }}
-    {{- end -}}
-    {{- if .Values.csi.plugin.nodeplugin.tolerations -}}
-      tolerations:
-{{ toYaml .Values.csi.plugin.nodeplugin.tolerations | indent 8 }}
-    {{- end -}}
+    {{- if .Values.csi.plugin.nodeplugin.affinity }}
+      affinity: {{ toYaml .Values.csi.plugin.nodeplugin.affinity . | nindent 8 }}
+    {{- end }}
+    {{- if .Values.csi.plugin.nodeplugin.nodeSelector }}
+      nodeSelector: {{ toYaml .Values.csi.plugin.nodeplugin.nodeSelector | nindent 8 }}
+    {{- end }}
+    {{- if .Values.csi.plugin.nodeplugin.tolerations }}
+      tolerations: {{ toYaml .Values.csi.plugin.nodeplugin.tolerations | nindent 8 }}
+    {{- end }}
