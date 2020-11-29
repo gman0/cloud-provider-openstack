@@ -1,0 +1,42 @@
+GIT_HOST = k8s.io
+
+PWD := $(shell pwd)
+BASE_DIR := $(shell basename $(PWD))
+# Keep an existing GOPATH, make a private one if it is undefined
+GOPATH_DEFAULT := $(PWD)/.go
+export GOPATH ?= $(GOPATH_DEFAULT)
+GOBIN_DEFAULT := $(GOPATH)/bin
+export GOBIN ?= $(GOBIN_DEFAULT)
+export GO111MODULE := on
+TESTARGS_DEFAULT := "-v"
+export TESTARGS ?= $(TESTARGS_DEFAULT)
+PKG := $(shell awk '/^module/ { print $$2 }' go.mod)
+DEST := $(GOPATH)/src/$(GIT_HOST)/$(BASE_DIR)
+SOURCES := $(shell find $(DEST) -name '*.go')
+HAS_LINT := $(shell command -v golint;)
+HAS_GOX := $(shell command -v gox;)
+HAS_IMPORT_BOSS := $(shell command -v import-boss;)
+GOX_PARALLEL ?= 3
+TARGETS ?= darwin/amd64 linux/amd64 linux/386 linux/arm linux/arm64 linux/ppc64le
+DIST_DIRS         = find * -type d -exec
+
+GOOS ?= $(shell go env GOOS)
+VERSION ?= $(shell git describe --exact-match 2> /dev/null || \
+                 git describe --match=$(git rev-parse --short=8 HEAD) --always --dirty --abbrev=8)
+GOFLAGS   :=
+TAGS      :=
+LDFLAGS   := "-w -s -X 'k8s.io/cloud-provider-openstack/pkg/version.Version=${VERSION}'"
+REGISTRY ?= k8scloudprovider
+
+all: manila-csi-plugin manila-csi-plugin-image
+
+manila-csi-plugin:
+	CGO_ENABLED=0 GOOS=$(GOOS) go build \
+		-ldflags $(LDFLAGS) \
+		-o cluster/images/manila-csi-plugin/manila-csi-plugin-amd64 \
+		cmd/manila-csi-plugin/main.go
+
+manila-csi-plugin-image:
+	docker build -f cluster/images/manila-csi-plugin/Dockerfile.build cluster/images/manila-csi-plugin -t manila-csi-plugin-amd64:latest
+
+.PHONY: manila-csi-plugin manila-csi-plugin-image
