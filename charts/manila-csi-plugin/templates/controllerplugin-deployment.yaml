@@ -49,11 +49,11 @@ spec:
             {{- end }}
           env:
             - name: ADDRESS
-              value: "unix:///var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/csi-controllerplugin.sock"
+              value: "unix:///csi/endpoint/csi-controllerplugin.sock"
           imagePullPolicy: {{ .Values.csi.provisioner.image.pullPolicy }}
           volumeMounts:
-            - name: plugin-dir
-              mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
+            - name: csiendpoint-dir
+              mountPath: /csi/endpoint
           resources: {{ toYaml .Values.csi.provisioner.resources | nindent 12 }}
         - name: snapshotter
           image: "{{ .Values.csi.snapshotter.image.repository }}:{{ .Values.csi.snapshotter.image.tag }}"
@@ -63,11 +63,11 @@ spec:
             - "--leader-election"
           env:
             - name: ADDRESS
-              value: "unix:///var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/csi-controllerplugin.sock"
+              value: "unix:///csi/endpoint/csi-controllerplugin.sock"
           imagePullPolicy: {{ .Values.csi.snapshotter.image.pullPolicy }}
           volumeMounts:
-            - name: plugin-dir
-              mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
+            - name: csiendpoint-dir
+              mountPath: /csi/endpoint
           resources: {{ toYaml .Values.csi.snapshotter.resources | nindent 12 }}
         - name: resizer
           image: "{{ .Values.csi.resizer.image.repository }}:{{ .Values.csi.resizer.image.tag }}"
@@ -78,11 +78,11 @@ spec:
             - "--handle-volume-inuse-error=false"
           env:
             - name: ADDRESS
-              value: "unix:///var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/csi-controllerplugin.sock"
+              value: "unix:///csi/endpoint/csi-controllerplugin.sock"
           imagePullPolicy: {{ .Values.csi.snapshotter.image.pullPolicy }}
           volumeMounts:
-            - name: plugin-dir
-              mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
+            - name: csiendpoint-dir
+              mountPath: /csi/endpoint
           resources: {{ toYaml .Values.csi.resizer.resources | nindent 12 }}
         - name: controllerplugin
           securityContext:
@@ -103,7 +103,6 @@ spec:
             --adapter-compatibility=name={{ .name }}{{ if .compatibility.createShareFromSnapshot }},create-share-from-snapshot-enabled={{ .compatibility.createShareFromSnapshot.enabled }},create-share-from-snapshot-mounts-dir={{ .compatibility.createShareFromSnapshot.mountsDir }},rsync-stderr-to-file={{ .compatibility.createShareFromSnapshot.stderrToFile }},rsync-io-timeout={{ .compatibility.createShareFromSnapshot.ioTimeout }}{{ end }}
             {{- end }}
             {{- end }}
-            --mount-info-dir=/csi/mountinfo
             {{- if .Values.csi.plugin.topologyAwarenessEnabled }}
             --with-topology
             --nodeaz={{ .Values.csi.plugin.nodeAZ }}
@@ -121,11 +120,11 @@ spec:
                 fieldRef:
                   fieldPath: spec.nodeName
             - name: CSI_ENDPOINT
-              value: "unix:///var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/csi-controllerplugin.sock"
+              value: "unix:///csi/endpoint/csi-controllerplugin.sock"
           imagePullPolicy: {{ .Values.csi.plugin.image.pullPolicy }}
           volumeMounts:
-            - name: plugin-dir
-              mountPath: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
+            - name: csiendpoint-dir
+              mountPath: /csi/endpoint
             - name: pod-mounts
               mountPath: /var/lib/kubelet/pods
               mountPropagation: Bidirectional
@@ -147,14 +146,10 @@ spec:
             {{- end }}
             {{- end }}
             {{- end }}
-            - name: mountinfo-dir
-              mountPath: /csi/mountinfo
           resources: {{ toYaml .Values.csi.plugin.controllerplugin.resources | nindent 12 }}
       volumes:
-        - name: plugin-dir
-          hostPath:
-            path: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}
-            type: DirectoryOrCreate
+        - name: csiendpoint-dir
+          emptyDir: {}
         {{- if .Values.csi.plugin.runtimeConfig.enabled }}
         - name: runtime-config-dir
           configMap:
@@ -180,10 +175,6 @@ spec:
         {{- end }}
         {{- end }}
         {{- end }}
-        - name: mountinfo-dir
-          hostPath:
-            path: /var/lib/kubelet/plugins/{{ .Values.csi.plugin.driverName }}/node/mountinfo
-            type: DirectoryOrCreate
     {{- if .Values.csi.plugin.controllerplugin.affinity }}
       affinity: {{ toYaml .Values.csi.plugin.controllerplugin.affinity . | nindent 8 }}
     {{- end }}

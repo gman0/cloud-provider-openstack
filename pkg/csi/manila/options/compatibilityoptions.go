@@ -23,7 +23,7 @@ type CompatibilityOptions struct {
 	Name string `name:"name"`
 
 	CreateShareFromSnapshotEnabled   string `name:"create-share-from-snapshot-enabled" value:"default:false" matches:"^true|false$"`
-	CreateShareFromSnapshotMountsDir string `name:"create-share-from-snapshot-mounts-dir" value:"optional"`
+	CreateShareFromSnapshotMountsDir string `name:"create-share-from-snapshot-mounts-dir" value:"requiredIf:create-share-from-snapshot-enabled=^true$"`
 
 	RsyncStderrToFile string `name:"rsync-stderr-to-file" value:"default:false" matches:"^true|false$"`
 	RsyncIoTimeout    string `name:"rsync-io-timeout" value:"default:false" value:"default:0" matches:"^[0-9]+$"`

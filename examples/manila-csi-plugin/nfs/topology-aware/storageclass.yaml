@@ -13,7 +13,7 @@ apiVersion: storage.k8s.io/v1
 kind: StorageClass
 metadata:
   name: csi-manila-nfs-az
-provisioner: nfs.manila.csi.openstack.org
+provisioner: manila.csi.openstack.org
 parameters:
   type: default
   availability: manila-zone-1

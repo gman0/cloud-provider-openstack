@@ -146,9 +146,9 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		return nil, status.Errorf(codes.InvalidArgument, "failed to choose a share adapter: %v", err)
 	}
 
-	// Check for pending CreateVolume for this volume name
+	// Check for pending operations for this volume name
 	if _, isPending := cs.pendingVolumes.LoadOrStore(req.GetName(), true); isPending {
-		return nil, status.Errorf(codes.Aborted, "a volume named %s is already being created", req.GetName())
+		return nil, status.Errorf(codes.Aborted, "volume named %s is already being processed", req.GetName())
 	}
 	defer cs.pendingVolumes.Delete(req.GetName())
 
@@ -263,6 +263,21 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
 
+	share, err := manilaClient.GetShareByID(req.GetVolumeId())
+	if err != nil {
+		if clouderrors.IsNotFound(err) {
+			return &csi.DeleteVolumeResponse{}, nil
+		} else {
+			return nil, status.Errorf(codes.Internal, "failed to retrieve share %s: %v", req.GetVolumeId(), err)
+		}
+	}
+
+	// Check for pending CreateVolume for this volume name
+	if _, isPending := cs.pendingVolumes.LoadOrStore(share.Name, true); isPending {
+		return nil, status.Errorf(codes.Aborted, "volume named %s is already being processed", share.Name)
+	}
+	defer cs.pendingVolumes.Delete(share.Name)
+
 	if err := deleteShare(req.GetVolumeId(), manilaClient); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete share %s: %v", req.GetVolumeId(), err)
 	}
@@ -282,9 +297,9 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 		return nil, status.Errorf(codes.InvalidArgument, "invalid OpenStack secrets: %v", err)
 	}
 
-	// Check for pending CreateSnapshots for this snapshot name
+	// Check for pending operations for this snapshot name
 	if _, isPending := cs.pendingSnapshots.LoadOrStore(req.GetName(), true); isPending {
-		return nil, status.Errorf(codes.Aborted, "a snapshot named %s is already being created", req.GetName())
+		return nil, status.Errorf(codes.Aborted, "snapshot named %s is already being processed", req.GetName())
 	}
 	defer cs.pendingSnapshots.Delete(req.GetName())
 
@@ -404,6 +419,21 @@ func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteS
 		return nil, status.Errorf(codes.Unauthenticated, "failed to create Manila v2 client: %v", err)
 	}
 
+	snap, err := manilaClient.GetSnapshotByID(req.GetSnapshotId())
+	if err != nil {
+		if clouderrors.IsNotFound(err) {
+			return &csi.DeleteSnapshotResponse{}, nil
+		} else {
+			return nil, status.Errorf(codes.Internal, "failed to retrieve share %s: %v", req.GetSnapshotId(), err)
+		}
+	}
+
+	// Check for pending operations for this snapshot name
+	if _, isPending := cs.pendingSnapshots.LoadOrStore(snap.Name, true); isPending {
+		return nil, status.Errorf(codes.Aborted, "snapshot named %s is already being processed", snap.Name)
+	}
+	defer cs.pendingSnapshots.Delete(snap.Name)
+
 	if err := deleteSnapshot(req.GetSnapshotId(), manilaClient); err != nil {
 		return nil, status.Errorf(codes.Internal, "failed to delete snapshot %s: %v", req.GetSnapshotId(), err)
 	}
@@ -519,6 +549,12 @@ func (cs *controllerServer) ControllerExpandVolume(ctx context.Context, req *csi
 
 		return nil, status.Errorf(codes.Internal, "failed to retrieve share %s: %v", req.GetVolumeId(), err)
 	}
+
+	// Check for pending CreateVolume for this volume name
+	if _, isPending := cs.pendingVolumes.LoadOrStore(share.Name, true); isPending {
+		return nil, status.Errorf(codes.Aborted, "volume named %s is already being processed", share.Name)
+	}
+	defer cs.pendingVolumes.Delete(share.Name)
 
 	// Try to resize the share
 
