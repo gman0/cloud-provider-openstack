@@ -45,7 +45,7 @@ var (
 	pendingSnapshots = sync.Map{}
 )
 
-func getVolumeCreator(source *csi.VolumeContentSource, shareOpts *options.ControllerVolumeContext, compatOpts *options.CompatibilityOptions, shareTypeCaps capabilities.ManilaCapabilities) (volumeCreator, error) {
+func getVolumeCreator(source *csi.VolumeContentSource, shareOpts *options.ControllerVolumeContext, compatOpts *options.CompatibilityOptions) (volumeCreator, error) {
 	if source == nil {
 		return &blankVolume{}, nil
 	}
@@ -55,11 +55,6 @@ func getVolumeCreator(source *csi.VolumeContentSource, shareOpts *options.Contro
 	}
 
 	if source.GetSnapshot() != nil {
-		if tryCompatForVolumeSource(compatOpts, shareOpts, source, shareTypeCaps) != nil {
-			klog.Infof("share type %s does not advertise create_share_from_snapshot_support capability, compatibility mode is available", shareOpts.Type)
-			return &blankVolume{}, nil
-		}
-
 		return &volumeFromSnapshot{}, nil
 	}
 
@@ -121,7 +116,7 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 
 	// Retrieve an existing share or create a new one
 
-	volCreator, err := getVolumeCreator(req.GetVolumeContentSource(), shareOpts, cs.d.compatOpts, shareTypeCaps)
+	volCreator, err := getVolumeCreator(req.GetVolumeContentSource(), shareOpts, cs.d.compatOpts)
 	if err != nil {
 		return nil, err
 	}
@@ -148,15 +143,6 @@ func (cs *controllerServer) CreateVolume(ctx context.Context, req *csi.CreateVol
 		}
 
 		return nil, status.Errorf(codes.Internal, "failed to grant access for share %s: %v", share.ID, err)
-	}
-
-	// Check if compatibility layer is needed and can be used
-	if compatLayer := tryCompatForVolumeSource(cs.d.compatOpts, shareOpts, req.GetVolumeContentSource(), shareTypeCaps); compatLayer != nil {
-		if err = compatLayer.SupplementCapability(cs.d.compatOpts, share, accessRight, req, cs.d.fwdEndpoint, manilaClient, cs.d.csiClientBuilder); err != nil {
-			// An error occurred, the user must clean the share manually
-			// TODO needs proper monitoring
-			return nil, err
-		}
 	}
 
 	var accessibleTopology []*csi.Topology
@@ -204,12 +190,6 @@ func (cs *controllerServer) DeleteVolume(ctx context.Context, req *csi.DeleteVol
 }
 
 func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateSnapshotRequest) (*csi.CreateSnapshotResponse, error) {
-	if cs.d.shareProto == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Creating CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.InvalidArgument, "the driver doesn't support snapshotting CephFS shares yet")
-	}
-
 	if err := validateCreateSnapshotRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
@@ -246,6 +226,33 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 	if strings.ToUpper(sourceShare.ShareProto) != cs.d.shareProto {
 		return nil, status.Errorf(codes.InvalidArgument, "share protocol mismatch: requested a snapshot of %s share %s, but share protocol selector is set to %s",
 			sourceShare.ShareProto, req.GetSourceVolumeId(), cs.d.shareProto)
+	}
+
+	// In order to satisfy CSI spec requirements around CREATE_DELETE_SNAPSHOT
+	// and the ability to populate volumes with snapshot contents, share type
+	// of the source share must advertise create_share_from_snapshot_support.
+	//
+	// TODO: It's not enough to validate only share type caps as they can change
+	//       over time. create_share_from_snapshot_support capability of the source
+	//       share needs to be checked as well. Add this check once this is exposed
+	//       in gopherclouds shares.Share struct.
+
+	shareTypeCaps, err := capabilities.GetManilaCapabilities(sourceShare.ShareType, manilaClient)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "failed to get Manila capabilities for share type %s: %v", sourceShare.ShareType, err)
+	}
+
+	requiredShareTypeCaps := []capabilities.ManilaCapability{
+		capabilities.ManilaCapabilitySnapshot,
+		capabilities.ManilaCapabilityShareFromSnapshot,
+	}
+
+	for _, c := range requiredShareTypeCaps {
+		if !shareTypeCaps[c] {
+			return nil, status.Errorf(codes.InvalidArgument,
+				"cannot create snapshot %s for volume %s: share type %s must support %s capability",
+				req.GetName(), req.GetSourceVolumeId(), sourceShare.ShareType, capabilities.ManilaCapabilityToString[c])
+		}
 	}
 
 	// Retrieve an existing snapshot or create a new one
@@ -311,12 +318,6 @@ func (cs *controllerServer) CreateSnapshot(ctx context.Context, req *csi.CreateS
 }
 
 func (cs *controllerServer) DeleteSnapshot(ctx context.Context, req *csi.DeleteSnapshotRequest) (*csi.DeleteSnapshotResponse, error) {
-	if cs.d.shareProto == "CEPHFS" {
-		// Restoring shares from CephFS snapshots needs special handling that's not implemented yet.
-		// TODO: Deleting CephFS snapshots is forbidden until CephFS restoration is in place.
-		return nil, status.Errorf(codes.InvalidArgument, "the driver doesn't support CephFS snapshots yet")
-	}
-
 	if err := validateDeleteSnapshotRequest(req); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
