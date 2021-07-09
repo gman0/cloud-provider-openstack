@@ -37,6 +37,18 @@ const (
 	extraSpecCreateShareFromSnapshotSupport = "create_share_from_snapshot_support"
 )
 
+var (
+	ManilaCapabilityToString = map[ManilaCapability]string{
+		ManilaCapabilitySnapshot:          extraSpecSnapshotSupport,
+		ManilaCapabilityShareFromSnapshot: extraSpecCreateShareFromSnapshotSupport,
+	}
+
+	StringToManilaCapability = map[string]ManilaCapability{
+		extraSpecSnapshotSupport:                ManilaCapabilitySnapshot,
+		extraSpecCreateShareFromSnapshotSupport: ManilaCapabilityShareFromSnapshot,
+	}
+)
+
 func GetManilaCapabilities(shareType string, manilaClient manilaclient.Interface) (ManilaCapabilities, error) {
 	shareTypes, err := manilaClient.GetShareTypes()
 	if err != nil {
